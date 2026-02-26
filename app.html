@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriTrack - Nutrition Tracker</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .app-container {
+            max-width: 414px;
+            margin: 0 auto;
+            background: white;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            position: relative;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .header .date {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .nav-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .nav-tab {
+            flex: 1;
+            padding: 15px 10px;
+            text-align: center;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .nav-tab.active {
+            color: #4CAF50;
+            background: white;
+        }
+
+        .nav-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: #4CAF50;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 20px;
+            padding-bottom: 80px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .daily-summary {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .summary-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .summary-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .summary-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .progress-bar {
+            background: #e9ecef;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .protein { background: #FF6B6B; }
+        .carbs { background: #4ECDC4; }
+        .fat { background: #45B7D1; }
+
+        .food-log {
+            background: white;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .log-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .log-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid #f8f9fa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-item:last-child {
+            border-bottom: none;
+        }
+
+        .log-item-info h4 {
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .log-item-nutrients {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .log-item-time {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .voice-btn {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #FF6B6B, #FF5252);
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .voice-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .voice-btn.listening {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); }
+            50% { transform: scale(1.05); box-shadow: 0 6px 20px rgba(76, 175, 80, 0.6); }
+            100% { transform: scale(1); box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); }
+        }
+
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 414px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            justify-content: around;
+        }
+
+        .nav-item {
+            flex: 1;
+            padding: 15px 10px;
+            text-align: center;
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #666;
+            transition: color 0.3s ease;
+        }
+
+        .nav-item.active {
+            color: #4CAF50;
+        }
+
+        .nav-item i {
+            display: block;
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+
+        .nav-item span {
+            font-size: 12px;
+        }
+
+        .food-search {
+            position: relative;
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            font-size: 16px;
+            background: white;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .food-list {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .food-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid #f8f9fa;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .food-item:hover {
+            background: #f8f9fa;
+        }
+
+        .food-item:last-child {
+            border-bottom: none;
+        }
+
+        .food-item h4 {
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .food-nutrients {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+        }
+
+        .modal.active {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 350px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal h3 {
+            margin-bottom: 20px;
+            text-align: center;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .recommendations {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .recommendation-item {
+            padding: 15px;
+            margin-bottom: 15px;
+            border-left: 4px solid #4CAF50;
+            background: #f8f9fa;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .recommendation-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .recommendation-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .recommendation-text {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            color: #ddd;
+            margin-bottom: 20px;
+        }
+
+        .add-food-btn {
+            position: fixed;
+            bottom: 90px;
+            left: 20px;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .add-food-btn:hover {
+            transform: scale(1.1);
+        }
+
+        @media (max-width: 480px) {
+            .app-container {
+                max-width: 100%;
+            }
+            
+            .bottom-nav {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="header">
+            <h1><i class="fas fa-utensils"></i> NutriTrack</h1>
+            <div class="date" id="currentDate"></div>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('dashboard')">
+                <i class="fas fa-home"></i> Dashboard
+            </button>
+            <button class="nav-tab" onclick="switchTab('foods')">
+                <i class="fas fa-apple-alt"></i> Foods
+            </button>
+            <button class="nav-tab" onclick="switchTab('log')">
+                <i class="fas fa-list"></i> Log
+            </button>
+            <button class="nav-tab" onclick="switchTab('insights')">
+                <i class="fas fa-chart-line"></i> Insights
+            </button>
+        </div>
+
+        <!-- Dashboard Tab -->
+        <div class="tab-content active" id="dashboard">
+            <div class="daily-summary">
+                <h3 style="margin-bottom: 15px; color: #333;">Today's Summary</h3>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <div class="summary-value" id="totalCalories">0</div>
+                        <div class="summary-label">Calories</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value" id="totalProtein">0g</div>
+                        <div class="summary-label">Protein</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill protein" id="proteinProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value" id="totalCarbs">0g</div>
+                        <div class="summary-label">Carbs</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill carbs" id="carbsProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <div class="summary-value" id="totalFat">0g</div>
+                        <div class="summary-label">Fat</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill fat" id="fatProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value" id="totalFiber">0g</div>
+                        <div class="summary-label">Fiber</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value" id="mealsLogged">0</div>
+                        <div class="summary-label">Meals</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="food-log">
+                <div class="log-header">
+                    <i class="fas fa-clock"></i> Recent Meals
+                </div>
+                <div id="recentMeals">
+                    <div class="empty-state">
+                        <i class="fas fa-utensils"></i>
+                        <p>No meals logged today</p>
+                        <p style="font-size: 14px; margin-top: 10px;">Use voice command or add manually</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Foods Tab -->
+        <div class="tab-content" id="foods">
+            <div class="food-search">
+                <input type="text" class="search-input" placeholder="Search foods..." id="foodSearch" oninput="searchFoods()">
+            </div>
+
+            <div class="food-list" id="foodList">
+                <!-- Food items will be populated here -->
+            </div>
+        </div>
+
+        <!-- Log Tab -->
+        <div class="tab-content" id="log">
+            <div class="food-log">
+                <div class="log-header">
+                    <i class="fas fa-history"></i> Food Log - <span id="logDate"></span>
+                </div>
+                <div id="fullFoodLog">
+                    <!-- Full log will be populated here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Insights Tab -->
+        <div class="tab-content" id="insights">
+            <div class="recommendations" id="recommendations">
+                <h3 style="margin-bottom: 15px; color: #333;">
+                    <i class="fas fa-lightbulb"></i> Personalized Recommendations
+                </h3>
+                <!-- Recommendations will be populated here -->
+            </div>
+        </div>
+
+        <!-- Voice Command Button -->
+        <button class="voice-btn" onclick="toggleVoiceCommand()" id="voiceBtn">
+            <i class="fas fa-microphone"></i>
+        </button>
+
+        <!-- Add Food Button -->
+        <button class="add-food-btn" onclick="openAddFoodModal()">
+            <i class="fas fa-plus"></i>
+        </button>
+
+        <!-- Add Food Modal -->
+        <div class="modal" id="addFoodModal">
+            <div class="modal-content">
+                <h3><i class="fas fa-plus-circle"></i> Add Food Item</h3>
+                <form onsubmit="addCustomFood(event)">
+                    <div class="form-group">
+                        <label for="foodName">Food Name</label>
+                        <input type="text" id="foodName" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="servingSize">Serving Size (g)</label>
+                        <input type="number" id="servingSize" value="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="calories">Calories per serving</label>
+                        <input type="number" id="calories" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="protein">Protein (g)</label>
+                        <input type="number" step="0.1" id="protein" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="carbs">Carbohydrates (g)</label>
+                        <input type="number" step="0.1" id="carbs" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="fat">Fat (g)</label>
+                        <input type="number" step="0.1" id="fat" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="fiber">Fiber (g)</label>
+                        <input type="number" step="0.1" id="fiber" value="0">
+                    </div>
+                    <button type="submit" class="btn">Add Food</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAddFoodModal()">Cancel</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Log Food Modal -->
+        <div class="modal" id="logFoodModal">
+            <div class="modal-content">
+                <h3 id="logFoodTitle">Log Food</h3>
+                <form onsubmit="logSelectedFood(event)">
+                    <div class="form-group">
+                        <label for="quantity">Quantity (g)</label>
+                        <input type="number" id="quantity" value="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="mealType">Meal Type</label>
+                        <select id="mealType" required>
+                            <option value="breakfast">Breakfast</option>
+                            <option value="lunch">Lunch</option>
+                            <option value="dinner">Dinner</option>
+                            <option value="snack">Snack</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn">Log Food</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeLogFoodModal()">Cancel</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // App State
+        let currentFood = null;
+        let isListening = false;
+        let recognition = null;
+        let dailyGoals = {
+            calories: 2000,
+            protein: 150,
+            carbs: 250,
+            fat: 65,
+            fiber: 25
+        };
+
+        // Food Database
+        let foodDatabase = [
+            // Grains & Cereals
+            { id: 1, name: "Rice (Basmati)", calories: 350, protein: 8.0, carbs: 78.0, fat: 0.6, fiber: 1.0, category: "grains" },
+            { id: 2, name: "Wheat Flour (Atta)", calories: 340, protein: 12.0, carbs: 69.0, fat: 1.7, fiber: 11.0, category: "grains" },
+            { id: 3, name: "Oats", calories: 389, protein: 16.9, carbs: 66.3, fat: 6.9, fiber: 10.6, category: "grains" },
+            { id: 4, name: "Quinoa", calories: 368, protein: 14.1, carbs: 64.2, fat: 6.1, fiber: 7.0, category: "grains" },
+            
+            // Lentils & Legumes
+            { id: 5, name: "Toor Dal (Pigeon Peas)", calories: 343, protein: 22.3, carbs: 57.6, fat: 1.5, fiber: 15.0, category: "legumes" },
+            { id: 6, name: "Moong Dal (Green Gram)", calories: 347, protein: 24.0, carbs: 59.0, fat: 1.2, fiber: 16.3, category: "legumes" },
+            { id: 7, name: "Chana Dal (Bengal Gram)", calories: 372, protein: 22.0, carbs: 57.0, fat: 5.3, fiber: 12.8, category: "legumes" },
+            { id: 8, name: "Black Lentils (Urad Dal)", calories: 341, protein: 25.2, carbs: 58.5, fat: 1.4, fiber: 4.8, category: "legumes" },
+            { id: 9, name: "Chickpeas (Kabuli Chana)", calories: 364, protein: 19.3, carbs: 61.0, fat: 6.0, fiber: 17.4, category: "legumes" },
+            { id: 10, name: "Kidney Beans (Rajma)", calories: 333, protein: 22.5, carbs: 60.3, fat: 1.4, fiber: 15.2, category: "legumes" },
+            
+            // Vegetables
+            { id: 11, name: "Spinach (Palak)", calories: 23, protein: 2.9, carbs: 3.6, fat: 0.4, fiber: 2.2, category: "vegetables" },
+            { id: 12, name: "Tomato", calories: 18, protein: 0.9, carbs: 3.9, fat: 0.2, fiber: 1.2, category: "vegetables" },
+            { id: 13, name: "Onion", calories: 40, protein: 1.1, carbs: 9.3, fat: 0.1, fiber: 1.7, category: "vegetables" },
+            { id: 14, name: "Potato", calories: 77, protein: 2.0, carbs: 17.0, fat: 0.1, fiber: 2.2, category: "vegetables" },
+            { id: 15, name: "Carrot", calories: 41, protein: 0.9, carbs: 9.6, fat: 0.2, fiber: 2.8, category: "vegetables" },
+            { id: 16, name: "Broccoli", calories: 34, protein: 2.8, carbs: 7.0, fat: 0.4, fiber: 2.6, category: "vegetables" },
+            { id: 17, name: "Cauliflower (Gobi)", calories: 25, protein: 1.9, carbs: 5.0, fat: 0.3, fiber: 2.0, category: "vegetables" },
+            { id: 18, name: "Okra (Bhindi)", calories: 33, protein: 1.9, carbs: 7.5, fat: 0.2, fiber: 3.2, category: "vegetables" },
+            
+            // Fruits
+            { id: 19, name: "Apple", calories: 52, protein: 0.3, carbs: 13.8, fat: 0.2, fiber: 2.4, category: "fruits" },
+            { id: 20, name: "Banana", calories: 89, protein: 1.1, carbs: 22.8, fat: 0.3, fiber: 2.6, category: "fruits" },
+            { id: 21, name: "Mango", calories: 60, protein: 0.8, carbs: 15.0, fat: 0.4, fiber: 1.6, category: "fruits" },
+            { id: 22, name: "Orange", calories: 47, protein: 0.9, carbs: 11.8, fat: 0.1, fiber: 2.4, category: "fruits" },
+            { id: 23, name: "Grapes", calories: 69, protein: 0.7, carbs: 18.1, fat: 0.2, fiber: 0.9, category: "fruits" },
+            { id: 24, name: "Pomegranate", calories: 83, protein: 1.7, carbs: 18.7, fat: 1.2, fiber: 4.0, category: "fruits" },
+            
+            // Dairy & Protein
+            { id: 25, name: "Milk (Whole)", calories: 42, protein: 3.4, carbs: 4.8, fat: 1.0, fiber: 0, category: "dairy" },
+            { id: 26, name: "Yogurt (Dahi)", calories: 59, protein: 3.5, carbs: 4.7, fat: 3.3, fiber: 0, category: "dairy" },
+            { id: 27, name: "Paneer (Cottage Cheese)", calories: 265, protein: 18.3, carbs: 6.0, fat: 20.8, fiber: 0, category: "dairy" },
+            { id: 28, name: "Chicken Breast", calories: 165, protein: 31.0, carbs: 0, fat: 3.6, fiber: 0, category: "protein" },
+            { id: 29, name: "Fish (Rohu)", calories: 97, protein: 16.6, carbs: 0, fat: 2.2, fiber: 0, category: "protein" },
+            { id: 30, name: "Eggs", calories: 155, protein: 13.0, carbs: 1.1, fat: 11.0, fiber: 0, category: "protein" },
+            
+            // Nuts & Seeds
+            { id: 31, name: "Almonds", calories: 579, protein: 21.2, carbs: 21.6, fat: 49.9, fiber: 12.5, category: "nuts" },
+            { id: 32, name: "Walnuts", calories: 654, protein: 15.2, carbs: 13.7, fat: 65.2, fiber: 6.7, category: "nuts" },
+            { id: 33, name: "Peanuts", calories: 567, protein: 25.8, carbs: 16.1, fat: 49.2, fiber: 8.5, category: "nuts" },
+            { id: 34, name: "Cashews", calories: 553, protein: 18.2, carbs: 30.2, fat: 43.9, fiber: 3.3, category: "nuts" },
+            
+            // Cooking Oils & Fats
+            { id: 35, name: "Ghee", calories: 900, protein: 0, carbs: 0, fat: 100.0, fiber: 0, category: "fats" },
+            { id: 36, name: "Coconut Oil", calories: 862, protein: 0, carbs: 0, fat: 100.0, fiber: 0, category: "fats" },
+            { id: 37, name: "Mustard Oil", calories: 884, protein: 0, carbs: 0, fat: 100.0, fiber: 0, category: "fats" },
+            
+            // Common Indian Dishes (per 100g serving)
+            { id: 38, name: "Roti (Wheat Chapati)", calories: 297, protein: 9.6, carbs: 55.8, fat: 4.4, fiber: 9.8, category: "dishes" },
+            { id: 39, name: "Paratha", calories: 320, protein: 6.5, carbs: 42.0, fat: 13.2, fiber: 3.7, category: "dishes" },
+            { id: 40, name: "Dal Tadka", calories: 108, protein: 7.6, carbs: 15.2, fat: 2.8, fiber: 5.2, category: "dishes" },
+            { id: 41, name: "Samosa", calories: 262, protein: 5.4, carbs: 25.0, fat: 15.5, fiber: 2.1, category: "dishes" },
+            { id: 42, name: "Idli", calories: 58, protein: 2.0, carbs: 12.0, fat: 0.3, fiber: 0.6, category: "dishes" },
+            { id: 43, name: "Dosa", calories: 168, protein: 4.0, carbs: 33.0, fat: 2.6, fiber: 1.2, category: "dishes" },
+            { id: 44, name: "Biryani (Veg)", calories: 130, protein: 3.8, carbs: 22.5, fat: 2.8, fiber: 1.5, category: "dishes" },
+            { id: 45, name: "Curd Rice", calories: 97, protein: 2.8, carbs: 16.2, fat: 2.1, fiber: 0.3, category: "dishes" }
+        ];
+
+        // Load custom foods from localStorage
+        const customFoods = JSON.parse(localStorage.getItem('customFoods') || '[]');
+        foodDatabase = [...foodDatabase, ...customFoods];
+
+        // Daily log storage
+        let dailyLog = JSON.parse(localStorage.getItem(`dailyLog_${getCurrentDate()}`) || '[]');
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentDate();
+            displayFoods();
+            updateDashboard();
+            updateFoodLog();
+            generateRecommendations();
+            setupVoiceRecognition();
+        });
+
+        function getCurrentDate() {
+            return new Date().toISOString().split('T')[0];
+        }
+
+        function updateCurrentDate() {
+            const today = new Date();
+            const options = { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            };
+            document.getElementById('currentDate').textContent = today.toLocaleDateString('en-US', options);
+            document.getElementById('logDate').textContent = today.toLocaleDateString('en-US');
+        }
+
+        function switchTab(tabName) {
+            // Update nav tabs
+            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+
+            // Refresh content if needed
+            if (tabName === 'foods') {
+                displayFoods();
+            } else if (tabName === 'log') {
+                updateFoodLog();
+            } else if (tabName === 'insights') {
+                generateRecommendations();
+            } else if (tabName === 'dashboard') {
+                updateDashboard();
+            }
+        }
+
+        function displayFoods() {
+            const foodList = document.getElementById('foodList');
+            const searchTerm = document.getElementById('foodSearch').value.toLowerCase();
+            
+            const filteredFoods = foodDatabase.filter(food => 
+                food.name.toLowerCase().includes(searchTerm)
+            );
+
+            foodList.innerHTML = filteredFoods.map(food => `
+                <div class="food-item" onclick="selectFood(${food.id})">
+                    <h4>${food.name}</h4>
+                    <div class="food-nutrients">
+                        <span><strong>Cal:</strong> ${food.calories}</span>
+                        <span><strong>P:</strong> ${food.protein}g</span>
+                        <span><strong>C:</strong> ${food.carbs}g</span>
+                        <span><strong>F:</strong> ${food.fat}g</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function searchFoods() {
+            displayFoods();
+        }
+
+        function selectFood(foodId) {
+            currentFood = foodDatabase.find(food => food.id === foodId);
+            if (currentFood) {
+                document.getElementById('logFoodTitle').innerHTML = `<i class="fas fa-utensils"></i> Log ${currentFood.name}`;
+                
+                // Set default meal type based on current time
+                const hour = new Date().getHours();
+                let defaultMeal = 'snack';
+                if (hour >= 6 && hour < 11) defaultMeal = 'breakfast';
+                else if (hour >= 11 && hour < 16) defaultMeal = 'lunch';
+                else if (hour >= 16 && hour < 22) defaultMeal = 'dinner';
+                
+                document.getElementById('mealType').value = defaultMeal;
+                document.getElementById('logFoodModal').classList.add('active');
+            }
+        }
+
+        function logSelectedFood(event) {
+            event.preventDefault();
+            
+            if (!currentFood) return;
+
+            const quantity = parseFloat(document.getElementById('quantity').value) || 100;
+            const mealType = document.getElementById('mealType').value;
+            const multiplier = quantity / 100; // Since all values are per 100g
+
+            const logEntry = {
+                id: Date.now(),
+                foodId: currentFood.id,
+                name: currentFood.name,
+                quantity: quantity,
+                mealType: mealType,
+                calories: Math.round(currentFood.calories * multiplier),
+                protein: Math.round(currentFood.protein * multiplier * 10) / 10,
+                carbs: Math.round(currentFood.carbs * multiplier * 10) / 10,
+                fat: Math.round(currentFood.fat * multiplier * 10) / 10,
+                fiber: Math.round(currentFood.fiber * multiplier * 10) / 10,
+                timestamp: new Date().toISOString()
+            };
+
+            dailyLog.push(logEntry);
+            localStorage.setItem(`dailyLog_${getCurrentDate()}`, JSON.stringify(dailyLog));
+
+            closeLogFoodModal();
+            updateDashboard();
+            updateFoodLog();
+            
+            // Show success message
+            showNotification(`${currentFood.name} logged successfully!`);
+        }
+
+        function updateDashboard() {
+            const totals = dailyLog.reduce((acc, entry) => ({
+                calories: acc.calories + entry.calories,
+                protein: acc.protein + entry.protein,
+                carbs: acc.carbs + entry.carbs,
+                fat: acc.fat + entry.fat,
+                fiber: acc.fiber + entry.fiber
+            }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+
+            // Update summary values
+            document.getElementById('totalCalories').textContent = Math.round(totals.calories);
+            document.getElementById('totalProtein').textContent = `${Math.round(totals.protein)}g`;
+            document.getElementById('totalCarbs').textContent = `${Math.round(totals.carbs)}g`;
+            document.getElementById('totalFat').textContent = `${Math.round(totals.fat)}g`;
+            document.getElementById('totalFiber').textContent = `${Math.round(totals.fiber)}g`;
+            document.getElementById('mealsLogged').textContent = dailyLog.length;
+
+            // Update progress bars
+            document.getElementById('proteinProgress').style.width = `${Math.min(100, (totals.protein / dailyGoals.protein) * 100)}%`;
+            document.getElementById('carbsProgress').style.width = `${Math.min(100, (totals.carbs / dailyGoals.carbs) * 100)}%`;
+            document.getElementById('fatProgress').style.width = `${Math.min(100, (totals.fat / dailyGoals.fat) * 100)}%`;
+
+            // Update recent meals
+            const recentMeals = document.getElementById('recentMeals');
+            if (dailyLog.length === 0) {
+                recentMeals.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-utensils"></i>
+                        <p>No meals logged today</p>
+                        <p style="font-size: 14px; margin-top: 10px;">Use voice command or add manually</p>
+                    </div>
+                `;
+            } else {
+                const recent = dailyLog.slice(-3).reverse();
+                recentMeals.innerHTML = recent.map(entry => `
+                    <div class="log-item">
+                        <div class="log-item-info">
+                            <h4>${entry.name}</h4>
+                            <div class="log-item-nutrients">
+                                ${entry.quantity}g • ${entry.calories} cal • P: ${entry.protein}g • C: ${entry.carbs}g • F: ${entry.fat}g
+                            </div>
+                        </div>
+                        <div class="log-item-time">
+                            ${entry.mealType} • ${new Date(entry.timestamp).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function updateFoodLog() {
+            const fullLog = document.getElementById('fullFoodLog');
+            
+            if (dailyLog.length === 0) {
+                fullLog.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-history"></i>
+                        <p>No food logged today</p>
+                        <p style="font-size: 14px; margin-top: 10px;">Start tracking your nutrition!</p>
+                    </div>
+                `;
+            } else {
+                // Group by meal type
+                const groupedLog = dailyLog.reduce((acc, entry) => {
+                    if (!acc[entry.mealType]) acc[entry.mealType] = [];
+                    acc[entry.mealType].push(entry);
+                    return acc;
+                }, {});
+
+                let logHTML = '';
+                const mealOrder = ['breakfast', 'lunch', 'dinner', 'snack'];
+                
+                mealOrder.forEach(mealType => {
+                    if (groupedLog[mealType]) {
+                        const mealTotal = groupedLog[mealType].reduce((sum, entry) => sum + entry.calories, 0);
+                        logHTML += `
+                            <div style="background: #f8f9fa; padding: 10px 20px; font-weight: 600; text-transform: capitalize; border-bottom: 1px solid #e9ecef;">
+                                ${mealType} (${Math.round(mealTotal)} calories)
+                            </div>
+                        `;
+                        
+                        groupedLog[mealType].forEach(entry => {
+                            logHTML += `
+                                <div class="log-item">
+                                    <div class="log-item-info">
+                                        <h4>${entry.name}</h4>
+                                        <div class="log-item-nutrients">
+                                            ${entry.quantity}g • ${entry.calories} cal • P: ${entry.protein}g • C: ${entry.carbs}g • F: ${entry.fat}g
+                                        </div>
+                                    </div>
+                                    <div class="log-item-time">
+                                        ${new Date(entry.timestamp).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
+                                    </div>
+                                </div>
+                            `;
+                        });
+                    }
+                });
+                
+                fullLog.innerHTML = logHTML;
+            }
+        }
+
+        function generateRecommendations() {
+            const totals = dailyLog.reduce((acc, entry) => ({
+                calories: acc.calories + entry.calories,
+                protein: acc.protein + entry.protein,
+                carbs: acc.carbs + entry.carbs,
+                fat: acc.fat + entry.fat,
+                fiber: acc.fiber + entry.fiber
+            }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+
+            const recommendations = [];
+
+            // Protein recommendations
+            if (totals.protein < dailyGoals.protein * 0.6) {
+                recommendations.push({
+                    title: "Increase Protein Intake",
+                    text: `You've consumed ${Math.round(totals.protein)}g protein today. Try adding dal, paneer, eggs, or chicken to reach your ${dailyGoals.protein}g daily goal.`
+                });
+            }
+
+            // Fiber recommendations
+            if (totals.fiber < dailyGoals.fiber * 0.5) {
+                recommendations.push({
+                    title: "Add More Fiber",
+                    text: "Include more vegetables, fruits, and whole grains. Try adding spinach to your dal or having an apple as a snack."
+                });
+            }
+
+            // Calorie recommendations
+            if (totals.calories < dailyGoals.calories * 0.7) {
+                recommendations.push({
+                    title: "Consider More Calories",
+                    text: "You may need more energy. Add healthy fats like nuts, ghee, or avocado to your meals."
+                });
+            } else if (totals.calories > dailyGoals.calories * 1.2) {
+                recommendations.push({
+                    title: "Watch Your Portions",
+                    text: "You're over your calorie goal. Consider smaller portions or lighter evening meals."
+                });
+            }
+
+            // Balanced meal recommendations
+            const mealTypes = [...new Set(dailyLog.map(entry => entry.mealType))];
+            if (mealTypes.length < 3) {
+                recommendations.push({
+                    title: "Eat Regular Meals",
+                    text: "Try to have 3 main meals (breakfast, lunch, dinner) to maintain steady energy levels throughout the day."
+                });
+            }
+
+            // Hydration reminder
+            recommendations.push({
+                title: "Stay Hydrated",
+                text: "Remember to drink 8-10 glasses of water daily. Add lemon or cucumber for variety."
+            });
+
+            // Default recommendation if no specific ones
+            if (recommendations.length === 1) {
+                recommendations.push({
+                    title: "Great Job!",
+                    text: "You're doing well with your nutrition tracking. Keep maintaining a balanced diet with variety."
+                });
+            }
+
+            const recommendationsHTML = recommendations.map(rec => `
+                <div class="recommendation-item">
+                    <div class="recommendation-title">${rec.title}</div>
+                    <div class="recommendation-text">${rec.text}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('recommendations').innerHTML = `
+                <h3 style="margin-bottom: 15px; color: #333;">
+                    <i class="fas fa-lightbulb"></i> Personalized Recommendations
+                </h3>
+                ${recommendationsHTML}
+            `;
+        }
+
+        function setupVoiceRecognition() {
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+
+                recognition.onstart = function() {
+                    isListening = true;
+                    document.getElementById('voiceBtn').classList.add('listening');
+                };
+
+                recognition.onend = function() {
+                    isListening = false;
+                    document.getElementById('voiceBtn').classList.remove('listening');
+                };
+
+                recognition.onresult = function(event) {
+                    const transcript = event.results[0][0].transcript.toLowerCase();
+                    processVoiceCommand(transcript);
+                };
+
+                recognition.onerror = function(event) {
+                    console.error('Speech recognition error:', event.error);
+                    showNotification('Voice command failed. Please try again.');
+                };
+            } else {
+                document.getElementById('voiceBtn').style.display = 'none';
+            }
+        }
+
+        function toggleVoiceCommand() {
+            if (!recognition) {
+                showNotification('Voice commands not supported in this browser.');
+                return;
+            }
+
+            if (isListening) {
+                recognition.stop();
+            } else {
+                recognition.start();
+                showNotification('Listening... Try saying "I ate rice" or "food ledger"');
+            }
+        }
+
+        function processVoiceCommand(command) {
+            console.log('Voice command:', command);
+
+            // Handle "food ledger" or "show log"
+            if (command.includes('food ledger') || command.includes('show log') || command.includes('ledger')) {
+                switchTab('log');
+                document.querySelector('[onclick="switchTab(\'log\')"]').click();
+                showNotification('Showing your food ledger');
+                return;
+            }
+
+            // Handle food logging commands like "I ate rice", "log chicken", etc.
+            const foodMatches = [];
+            for (let food of foodDatabase) {
+                if (command.includes(food.name.toLowerCase()) || 
+                    food.name.toLowerCase().includes(command.replace(/^(i ate |log |add )/i, ''))) {
+                    foodMatches.push(food);
+                }
+            }
+
+            if (foodMatches.length > 0) {
+                // Use the best match (first one for now)
+                currentFood = foodMatches[0];
+                
+                // Extract quantity if mentioned
+                const quantityMatch = command.match(/(\d+)\s*(gram|grams|g|kg)/i);
+                let quantity = 100; // default
+                if (quantityMatch) {
+                    quantity = parseInt(quantityMatch[1]);
+                    if (quantityMatch[2].toLowerCase().includes('kg')) {
+                        quantity *= 1000;
+                    }
+                }
+
+                // Auto-log with current meal type
+                const hour = new Date().getHours();
+                let mealType = 'snack';
+                if (hour >= 6 && hour < 11) mealType = 'breakfast';
+                else if (hour >= 11 && hour < 16) mealType = 'lunch';
+                else if (hour >= 16 && hour < 22) mealType = 'dinner';
+
+                const multiplier = quantity / 100;
+                const logEntry = {
+                    id: Date.now(),
+                    foodId: currentFood.id,
+                    name: currentFood.name,
+                    quantity: quantity,
+                    mealType: mealType,
+                    calories: Math.round(currentFood.calories * multiplier),
+                    protein: Math.round(currentFood.protein * multiplier * 10) / 10,
+                    carbs: Math.round(currentFood.carbs * multiplier * 10) / 10,
+                    fat: Math.round(currentFood.fat * multiplier * 10) / 10,
+                    fiber: Math.round(currentFood.fiber * multiplier * 10) / 10,
+                    timestamp: new Date().toISOString()
+                };
+
+                dailyLog.push(logEntry);
+                localStorage.setItem(`dailyLog_${getCurrentDate()}`, JSON.stringify(dailyLog));
+                updateDashboard();
+                updateFoodLog();
+                
+                showNotification(`Logged ${quantity}g of ${currentFood.name} for ${mealType}!`);
+            } else {
+                showNotification('Food not found. Try "I ate rice" or "food ledger" to see your log.');
+            }
+        }
+
+        function openAddFoodModal() {
+            document.getElementById('addFoodModal').classList.add('active');
+        }
+
+        function closeAddFoodModal() {
+            document.getElementById('addFoodModal').classList.remove('active');
+            document.getElementById('addFoodModal').querySelector('form').reset();
+        }
+
+        function closeLogFoodModal() {
+            document.getElementById('logFoodModal').classList.remove('active');
+            document.getElementById('quantity').value = '100';
+        }
+
+        function addCustomFood(event) {
+            event.preventDefault();
+            
+            const newFood = {
+                id: Date.now(),
+                name: document.getElementById('foodName').value,
+                calories: parseInt(document.getElementById('calories').value),
+                protein: parseFloat(document.getElementById('protein').value),
+                carbs: parseFloat(document.getElementById('carbs').value),
+                fat: parseFloat(document.getElementById('fat').value),
+                fiber: parseFloat(document.getElementById('fiber').value) || 0,
+                category: 'custom'
+            };
+
+            foodDatabase.push(newFood);
+            
+            // Save custom foods to localStorage
+            const customFoods = JSON.parse(localStorage.getItem('customFoods') || '[]');
+            customFoods.push(newFood);
+            localStorage.setItem('customFoods', JSON.stringify(customFoods));
+
+            closeAddFoodModal();
+            displayFoods();
+            showNotification(`${newFood.name} added to food database!`);
+        }
+
+        function showNotification(message) {
+            // Create a simple toast notification
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #4CAF50;
+                color: white;
+                padding: 12px 24px;
+                border-radius: 25px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                z-index: 3000;
+                font-weight: 600;
+                max-width: 90%;
+                text-align: center;
+            `;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s ease';
+                setTimeout(() => document.body.removeChild(toast), 300);
+            }, 3000);
+        }
+
+        // Modal click outside to close
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('click', function(event) {
+                if (event.target === this) {
+                    this.classList.remove('active');
+                }
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(event) {
+            // Escape to close modals
+            if (event.key === 'Escape') {
+                document.querySelectorAll('.modal.active').forEach(modal => {
+                    modal.classList.remove('active');
+                });
+            }
+            
+            // Space to toggle voice command
+            if (event.code === 'Space' && event.target.tagName !== 'INPUT') {
+                event.preventDefault();
+                toggleVoiceCommand();
+            }
+        });
+    </script>
+</body>
+</html>

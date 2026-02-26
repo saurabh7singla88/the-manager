@@ -1,0 +1,167 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  avatar    String?
+  role      Role     @default(MANAGER)
+  
+  preferences Json?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastLogin DateTime?
+
+  // Relations
+  initiatives Initiative[] @relation("InitiativeCreator")
+  assignedInitiatives Initiative[] @relation("InitiativeAssignees")
+  comments Comment[]
+  activityLogs ActivityLog[]
+  links Link[]
+
+  @@map("users")
+}
+
+model Initiative {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  type        InitiativeType @default(INITIATIVE)
+  
+  // Hierarchy
+  parentId    String?
+  parent      Initiative? @relation("InitiativeChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Initiative[] @relation("InitiativeChildren")
+  
+  // Status & Priority
+  status      Status   @default(OPEN)
+  priority    Priority @default(MEDIUM)
+  
+  // Dates & Progress
+  startDate   DateTime?
+  dueDate     DateTime?
+  completedAt DateTime?
+  progress    Int      @default(0) // 0-100
+  
+  // Tags & Metadata
+  tags        String[]
+  
+  // Position for mind map view
+  positionX   Float?
+  positionY   Float?
+  
+  // Relations
+  createdById String
+  createdBy   User     @relation("InitiativeCreator", fields: [createdById], references: [id])
+  
+  assignees   User[]   @relation("InitiativeAssignees")
+  
+  links       Link[]
+  comments    Comment[]
+  activityLogs ActivityLog[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([status])
+  @@index([priority])
+  @@index([createdById])
+  @@map("initiatives")
+}
+
+model Link {
+  id            String   @id @default(uuid())
+  url           String
+  title         String?
+  description   String?
+  category      String?
+  tags          String[]
+  
+  initiativeId  String
+  initiative    Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
+  
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@map("links")
+}
+
+model Comment {
+  id            String   @id @default(uuid())
+  content       String
+  
+  initiativeId  String
+  initiative    Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@map("comments")
+}
+
+model ActivityLog {
+  id            String   @id @default(uuid())
+  action        String
+  changes       Json?
+  
+  initiativeId  String
+  initiative    Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  
+  timestamp     DateTime @default(now())
+
+  @@index([initiativeId])
+  @@index([timestamp])
+  @@map("activity_logs")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  VIEWER
+}
+
+enum InitiativeType {
+  INITIATIVE
+  TASK
+  SUBTASK
+}
+
+enum Status {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
