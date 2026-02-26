@@ -1,55 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
+import api from '../api/axios';
 import {
-  Box,
-  Typography,
-  Button,
-  Card,
-  CardContent,
-  IconButton,
-  Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  Grid,
-  CircularProgress
+  Box, Typography, Button, IconButton, Chip,
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  TextField, Select, MenuItem, FormControl, InputLabel,
+  Grid, CircularProgress, Divider, Tooltip
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline } from '@mui/icons-material';
 import {
-  fetchInitiatives,
-  createInitiative,
-  updateInitiative,
-  deleteInitiative,
-  updateStatus,
-  updatePriority,
-  fetchInitiativeById
+  fetchInitiatives, createInitiative, updateInitiative,
+  deleteInitiative, updateStatus, updatePriority, fetchInitiativeById
 } from '../features/initiatives/initiativesSlice';
 import { format } from 'date-fns';
 
-const STATUS_COLORS = {
-  OPEN: 'default',
-  IN_PROGRESS: 'info',
-  BLOCKED: 'error',
-  ON_HOLD: 'warning',
-  COMPLETED: 'success',
-  CANCELLED: 'default'
+const STATUS_CONFIG = {
+  OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
+  IN_PROGRESS: { label: 'In Progress', color: '#2563eb', bg: '#eff6ff' },
+  BLOCKED:     { label: 'Blocked',     color: '#dc2626', bg: '#fef2f2' },
+  ON_HOLD:     { label: 'On Hold',     color: '#d97706', bg: '#fffbeb' },
+  COMPLETED:   { label: 'Completed',   color: '#059669', bg: '#f0fdf4' },
+  CANCELLED:   { label: 'Cancelled',   color: '#6b7280', bg: '#f9fafb' },
 };
 
-const PRIORITY_COLORS = {
-  CRITICAL: 'error',
-  HIGH: 'warning',
-  MEDIUM: 'info',
-  LOW: 'default'
+const PRIORITY_CONFIG = {
+  CRITICAL: { color: '#dc2626', bg: '#fef2f2', border: '#dc2626' },
+  HIGH:     { color: '#d97706', bg: '#fffbeb', border: '#d97706' },
+  MEDIUM:   { color: '#2563eb', bg: '#eff6ff', border: '#2563eb' },
+  LOW:      { color: '#64748b', bg: '#f1f5f9', border: '#64748b' },
 };
+
+const TYPE_LABELS = { INITIATIVE: 'Initiative', TASK: 'Task', SUBTASK: 'Subtask' };
 
 export default function InitiativesList() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { items, loading, selectedInitiative } = useSelector((state) => state.initiatives);
   const [openDialog, setOpenDialog] = useState(false);
   const [detailsDialog, setDetailsDialog] = useState(false);
@@ -63,6 +49,8 @@ export default function InitiativesList() {
     parentId: null
   });
   const [editingId, setEditingId] = useState(null);
+  const [childrenMap, setChildrenMap] = useState({}); // { [parentId]: initiative[] }
+  const [loadingChildren, setLoadingChildren] = useState({});
 
   useEffect(() => {
     dispatch(fetchInitiatives({ parentId: 'null' }));
@@ -106,14 +94,34 @@ export default function InitiativesList() {
     setEditingId(null);
   };
 
+  const fetchChildren = useCallback(async (id) => {
+    setLoadingChildren(prev => ({ ...prev, [id]: true }));
+    try {
+      const response = await api.get(`/initiatives?parentId=${id}`);
+      setChildrenMap(prev => ({ ...prev, [id]: response.data }));
+    } catch (e) {
+      console.error('Failed to fetch children', e);
+    } finally {
+      setLoadingChildren(prev => ({ ...prev, [id]: false }));
+    }
+  }, []);
+
   const handleSubmit = async () => {
+    const parentId = formData.parentId; // capture before dialog closes and resets formData
     if (editingId) {
       await dispatch(updateInitiative({ id: editingId, data: formData }));
     } else {
       await dispatch(createInitiative(formData));
     }
     handleCloseDialog();
+    // Refresh root list (updates _count on parent items)
     dispatch(fetchInitiatives({ parentId: 'null' }));
+    // If it was a child, also refresh that parent's children in the map
+    if (parentId) {
+      fetchChildren(parentId);
+      // Auto-expand the parent
+      setExpanded(prev => ({ ...prev, [parentId]: true }));
+    }
   };
 
   const handleDelete = async (id) => {
@@ -137,94 +145,139 @@ export default function InitiativesList() {
   };
 
   const toggleExpand = (id) => {
-    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+    setExpanded(prev => {
+      const nowExpanded = !prev[id];
+      if (nowExpanded) fetchChildren(id);
+      return { ...prev, [id]: nowExpanded };
+    });
   };
 
-  const renderInitiative = (initiative, level = 0) => (
-    <Box key={initiative.id} sx={{ ml: level * 4 }}>
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box display="flex" justifyContent="space-between" alignItems="start">
-            <Box sx={{ flex: 1 }}>
-              <Box display="flex" alignItems="center" gap={1}>
-                {initiative._count?.children > 0 && (
-                  <IconButton size="small" onClick={() => toggleExpand(initiative.id)}>
-                    {expanded[initiative.id] ? <ExpandLess /> : <ExpandMore />}
-                  </IconButton>
-                )}
-                <Typography variant="h6">{initiative.title}</Typography>
-                <Chip
-                  size="small"
-                  label={initiative.type}
-                  variant="outlined"
-                />
-              </Box>
-              {initiative.description && (
-                <Typography variant="body2" color="textSecondary" sx={{ mt: 1, ml: initiative._count?.children > 0 ? 5 : 0 }}>
-                  {initiative.description}
-                </Typography>
-              )}
-              <Box display="flex" gap={1} mt={2} ml={initiative._count?.children > 0 ? 5 : 0}>
-                <FormControl size="small" sx={{ minWidth: 120 }}>
-                  <Select
-                    value={initiative.status}
-                    onChange={(e) => handleStatusChange(initiative.id, e.target.value)}
-                  >
-                    <MenuItem value="OPEN">Open</MenuItem>
-                    <MenuItem value="IN_PROGRESS">In Progress</MenuItem>
-                    <MenuItem value="BLOCKED">Blocked</MenuItem>
-                    <MenuItem value="ON_HOLD">On Hold</MenuItem>
-                    <MenuItem value="COMPLETED">Completed</MenuItem>
-                    <MenuItem value="CANCELLED">Cancelled</MenuItem>
-                  </Select>
-                </FormControl>
-                <FormControl size="small" sx={{ minWidth: 100 }}>
-                  <Select
-                    value={initiative.priority}
-                    onChange={(e) => handlePriorityChange(initiative.id, e.target.value)}
-                  >
-                    <MenuItem value="CRITICAL">Critical</MenuItem>
-                    <MenuItem value="HIGH">High</MenuItem>
-                    <MenuItem value="MEDIUM">Medium</MenuItem>
-                    <MenuItem value="LOW">Low</MenuItem>
-                  </Select>
-                </FormControl>
-                <Chip
-                  size="small"
-                  label={initiative.assignees?.length || 0}
-                  icon={<>👥</>}
-                />
-                {initiative._count?.children > 0 && (
-                  <Chip
-                    size="small"
-                    label={`${initiative._count.children} sub-items`}
-                    variant="outlined"
-                  />
-                )}
-              </Box>
-              {initiative.createdBy && (
-                <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 1, ml: initiative._count?.children > 0 ? 5 : 0 }}>
-                  Created by {initiative.createdBy.name} on {format(new Date(initiative.createdAt), 'MMM dd, yyyy')}
-                </Typography>
-              )}
+  const renderInitiative = (initiative, level = 0) => {
+    const sc = STATUS_CONFIG[initiative.status] || STATUS_CONFIG.OPEN;
+    const pc = PRIORITY_CONFIG[initiative.priority] || PRIORITY_CONFIG.MEDIUM;
+    const hasChildren = initiative._count?.children > 0;
+    const isExpanded = expanded[initiative.id];
+    return (
+      <Box key={initiative.id}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
+            px: 2,
+            py: 1.5,
+            ml: level * 3,
+            bgcolor: 'background.paper',
+            border: '1px solid #e2e8f0',
+            borderLeft: `3px solid ${pc.border}`,
+            borderRadius: 2,
+            mb: 1,
+            transition: 'box-shadow 0.15s',
+            '&:hover': { boxShadow: '0 2px 8px rgba(0,0,0,0.07)' },
+          }}
+        >
+          {/* Expand toggle */}
+          <Box sx={{ width: 28, flexShrink: 0 }}>
+            {hasChildren ? (
+              <IconButton size="small" onClick={() => toggleExpand(initiative.id)} sx={{ p: 0.25 }}>
+                {isExpanded ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+              </IconButton>
+            ) : null}
+          </Box>
+
+          {/* Title + meta */}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+              <Typography variant="body2" fontWeight={600} sx={{ lineHeight: 1.3 }}>
+                {initiative.title}
+              </Typography>
+              <Chip
+                label={TYPE_LABELS[initiative.type] || initiative.type}
+                size="small"
+                variant="outlined"
+                sx={{ height: 18, fontSize: '0.65rem', px: 0.5, color: 'text.secondary', borderColor: '#e2e8f0' }}
+              />
             </Box>
-            <Box display="flex" gap={1}>
-              <IconButton size="small" onClick={() => handleViewDetails(initiative.id)} title="View Details">
-                <Add />
-              </IconButton>
-              <IconButton size="small" onClick={() => handleOpenDialog(null, initiative)} title="Edit">
-                <Edit />
-              </IconButton>
-              <IconButton size="small" onClick={() => handleDelete(initiative.id)} color="error" title="Delete">
-                <Delete />
-              </IconButton>
+            {initiative.description && (
+              <Typography variant="caption" color="text.secondary" noWrap display="block" sx={{ mt: 0.25 }}>
+                {initiative.description}
+              </Typography>
+            )}
+            <Box display="flex" gap={0.75} mt={0.75} flexWrap="wrap" alignItems="center">
+              <FormControl size="small">
+                <Select
+                  value={initiative.status}
+                  onChange={(e) => handleStatusChange(initiative.id, e.target.value)}
+                  sx={{
+                    fontSize: '0.72rem', height: 24, bgcolor: sc.bg, color: sc.color,
+                    fontWeight: 500, '.MuiOutlinedInput-notchedOutline': { border: 'none' },
+                    '.MuiSelect-icon': { color: sc.color, right: 2 },
+                    pr: 0.5,
+                  }}
+                >
+                  {Object.entries(STATUS_CONFIG).map(([v, c]) => (
+                    <MenuItem key={v} value={v} sx={{ fontSize: '0.78rem' }}>{c.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl size="small">
+                <Select
+                  value={initiative.priority}
+                  onChange={(e) => handlePriorityChange(initiative.id, e.target.value)}
+                  sx={{
+                    fontSize: '0.72rem', height: 24, bgcolor: pc.bg, color: pc.color,
+                    fontWeight: 500, '.MuiOutlinedInput-notchedOutline': { border: 'none' },
+                    '.MuiSelect-icon': { color: pc.color, right: 2 },
+                    pr: 0.5,
+                  }}
+                >
+                  {Object.entries(PRIORITY_CONFIG).map(([v, c]) => (
+                    <MenuItem key={v} value={v} sx={{ fontSize: '0.78rem', color: c.color }}>{v.charAt(0) + v.slice(1).toLowerCase()}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {hasChildren && (
+                <Typography variant="caption" color="text.disabled">
+                  {initiative._count.children} sub-item{initiative._count.children !== 1 ? 's' : ''}
+                </Typography>
+              )}
+              {initiative.createdBy && (
+                <Typography variant="caption" color="text.disabled">
+                  · {format(new Date(initiative.createdAt), 'MMM d')}
+                </Typography>
+              )}
             </Box>
           </Box>
-        </CardContent>
-      </Card>
-      {expanded[initiative.id] && initiative.children?.map(child => renderInitiative(child, level + 1))}
-    </Box>
-  );
+
+          {/* Actions */}
+          <Box display="flex" gap={0.25} flexShrink={0}>
+            <Tooltip title="Add sub-item">
+              <IconButton size="small" onClick={() => handleOpenDialog(initiative.id)} sx={{ color: 'primary.main' }}>
+                <AddCircleOutline sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Edit">
+              <IconButton size="small" onClick={() => handleOpenDialog(null, initiative)} sx={{ color: 'text.secondary' }}>
+                <Edit sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Delete">
+              <IconButton size="small" onClick={() => handleDelete(initiative.id)} sx={{ color: 'error.main' }}>
+                <Delete sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* Children */}
+        {isExpanded && (
+          loadingChildren[initiative.id]
+            ? <Box sx={{ ml: (level + 1) * 3 + 2, mb: 1, py: 1 }}><CircularProgress size={18} /></Box>
+            : (childrenMap[initiative.id] || []).map(child => renderInitiative(child, level + 1))
+        )}
+      </Box>
+    );
+  };
 
   if (loading && items.length === 0) {
     return (
@@ -236,32 +289,54 @@ export default function InitiativesList() {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Initiatives</Typography>
-        <Button
-          variant="contained"
-          startIcon={<Add />}
-          onClick={() => handleOpenDialog()}
-        >
-          New Initiative
-        </Button>
+      <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={4}>
+        <Box>
+          <Typography variant="h4" fontWeight={700}>Initiatives</Typography>
+          <Typography variant="body2" color="text.secondary" mt={0.5}>
+            {items.length} item{items.length !== 1 ? 's' : ''} total
+          </Typography>
+        </Box>
+        <Box display="flex" gap={1}>
+          <Button
+            variant="outlined"
+            startIcon={<AccountTree />}
+            onClick={() => navigate('/mindmap')}
+          >
+            Mind Map
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<Add />}
+            onClick={() => handleOpenDialog()}
+          >
+            New Initiative
+          </Button>
+        </Box>
       </Box>
 
       {items.length === 0 ? (
-        <Card>
-          <CardContent>
-            <Typography align="center" color="textSecondary">
-              No initiatives yet. Create your first one!
-            </Typography>
-          </CardContent>
-        </Card>
+        <Box
+          sx={{
+            bgcolor: 'background.paper',
+            borderRadius: 3,
+            border: '1px solid #e2e8f0',
+            p: 6,
+            textAlign: 'center',
+          }}
+        >
+          <Typography color="text.secondary" mb={2}>No initiatives yet. Create your first one!</Typography>
+          <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>Create Initiative</Button>
+        </Box>
       ) : (
-        items.map(initiative => renderInitiative(initiative))
+        <Box>{items.map(initiative => renderInitiative(initiative))}</Box>
       )}
 
       {/* Create/Edit Dialog */}
-      <Dialog open={openDialog} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingId ? 'Edit Initiative' : 'New Initiative'}</DialogTitle>
+      <Dialog open={openDialog} onClose={handleCloseDialog} maxWidth="sm" fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ pb: 1, fontWeight: 700 }}>{editingId ? 'Edit Initiative' : 'New Initiative'}</DialogTitle>
+        <Divider />
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
@@ -331,8 +406,8 @@ export default function InitiativesList() {
             </Grid>
           </Grid>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDialog}>Cancel</Button>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={handleCloseDialog} variant="outlined">Cancel</Button>
           <Button onClick={handleSubmit} variant="contained" disabled={!formData.title}>
             {editingId ? 'Update' : 'Create'}
           </Button>
@@ -340,40 +415,53 @@ export default function InitiativesList() {
       </Dialog>
 
       {/* Details Dialog */}
-      <Dialog open={detailsDialog} onClose={() => setDetailsDialog(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Initiative Details</DialogTitle>
-        <DialogContent>
+      <Dialog open={detailsDialog} onClose={() => setDetailsDialog(false)} maxWidth="md" fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700 }}>Initiative Details</DialogTitle>
+        <Divider />
+        <DialogContent sx={{ pt: 2 }}>
           {selectedInitiative && (
             <Box>
-              <Typography variant="h6" gutterBottom>{selectedInitiative.title}</Typography>
-              <Typography variant="body1" paragraph>{selectedInitiative.description}</Typography>
-              <Grid container spacing={2}>
+              <Typography variant="h6" fontWeight={700} gutterBottom>{selectedInitiative.title}</Typography>
+              {selectedInitiative.description && (
+                <Typography variant="body2" color="text.secondary" paragraph>{selectedInitiative.description}</Typography>
+              )}
+              <Grid container spacing={2} mt={0.5}>
                 <Grid item xs={6}>
-                  <Typography variant="subtitle2">Status</Typography>
-                  <Chip label={selectedInitiative.status.replace('_', ' ')} color={STATUS_COLORS[selectedInitiative.status]} />
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Status</Typography>
+                  {(() => { const sc = STATUS_CONFIG[selectedInitiative.status] || STATUS_CONFIG.OPEN; return (
+                    <Chip label={sc.label} size="small" sx={{ bgcolor: sc.bg, color: sc.color, fontWeight: 500, border: 0 }} />
+                  ); })()}
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="subtitle2">Priority</Typography>
-                  <Chip label={selectedInitiative.priority} color={PRIORITY_COLORS[selectedInitiative.priority]} />
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Priority</Typography>
+                  {(() => { const pc = PRIORITY_CONFIG[selectedInitiative.priority] || PRIORITY_CONFIG.MEDIUM; return (
+                    <Chip label={selectedInitiative.priority} size="small" sx={{ bgcolor: pc.bg, color: pc.color, fontWeight: 500, border: 0 }} />
+                  ); })()}
                 </Grid>
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2">Progress</Typography>
-                  <Typography>{selectedInitiative.progress}%</Typography>
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Progress</Typography>
+                  <Typography variant="body2">{selectedInitiative.progress ?? 0}%</Typography>
                 </Grid>
                 {selectedInitiative.children?.length > 0 && (
                   <Grid item xs={12}>
-                    <Typography variant="subtitle2">Sub-items ({selectedInitiative.children.length})</Typography>
-                    {selectedInitiative.children.map(child => (
-                      <Chip key={child.id} label={child.title} size="small" sx={{ mr: 1, mt: 1 }} />
-                    ))}
+                    <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.75}>
+                      Sub-items ({selectedInitiative.children.length})
+                    </Typography>
+                    <Box display="flex" flexWrap="wrap" gap={0.75}>
+                      {selectedInitiative.children.map(child => (
+                        <Chip key={child.id} label={child.title} size="small" sx={{ bgcolor: '#f1f5f9' }} />
+                      ))}
+                    </Box>
                   </Grid>
                 )}
               </Grid>
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailsDialog(false)}>Close</Button>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDetailsDialog(false)} variant="outlined">Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

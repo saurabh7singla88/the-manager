@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import InitiativesList from './pages/InitiativesList';
+import MindMap from './pages/MindMap';
 import Layout from './components/Layout';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
       <Route element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/initiatives" element={<InitiativesList />} />
+        <Route path="/mindmap" element={<MindMap />} />
       </Route>
     </Routes>
   );

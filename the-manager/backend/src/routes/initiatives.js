@@ -446,6 +446,23 @@ router.patch('/:id/priority',
   }
 );
 
+// Update position (for mind map drag)
+router.patch('/:id/position', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { positionX, positionY } = req.body;
+
+    const initiative = await prisma.initiative.update({
+      where: { id },
+      data: { positionX, positionY }
+    });
+
+    res.json(initiative);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get children of an initiative
 router.get('/:id/children', async (req, res, next) => {
   try {

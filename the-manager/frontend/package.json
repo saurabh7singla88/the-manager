@@ -22,6 +22,7 @@
     "react-hook-form": "^7.49.3",
     "react-redux": "^9.2.0",
     "react-router-dom": "^6.21.0",
+    "reactflow": "^11.11.4",
     "zustand": "^4.4.7"
   },
   "devDependencies": {

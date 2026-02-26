@@ -92,10 +92,36 @@ export const updatePriority = createAsyncThunk(
   }
 );
 
+export const fetchAllInitiatives = createAsyncThunk(
+  'initiatives/fetchAll_flat',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await api.get('/initiatives');
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to fetch initiatives');
+    }
+  }
+);
+
+export const updatePosition = createAsyncThunk(
+  'initiatives/updatePosition',
+  async ({ id, positionX, positionY }, { rejectWithValue }) => {
+    try {
+      const response = await api.patch(`/initiatives/${id}/position`, { positionX, positionY });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to update position');
+    }
+  }
+);
+
 const initialState = {
   items: [],
+  allItems: [],
   selectedInitiative: null,
   loading: false,
+  allItemsLoading: false,
   error: null,
   filters: {
     status: '',
@@ -170,6 +196,24 @@ const initiativesSlice = createSlice({
         const index = state.items.findIndex(item => item.id === action.payload.id);
         if (index !== -1) {
           state.items[index] = action.payload;
+        }
+      })
+      // Fetch all (flat, for mind map)
+      .addCase(fetchAllInitiatives.pending, (state) => {
+        state.allItemsLoading = true;
+      })
+      .addCase(fetchAllInitiatives.fulfilled, (state, action) => {
+        state.allItemsLoading = false;
+        state.allItems = action.payload;
+      })
+      .addCase(fetchAllInitiatives.rejected, (state) => {
+        state.allItemsLoading = false;
+      })
+      // Update position
+      .addCase(updatePosition.fulfilled, (state, action) => {
+        const index = state.allItems.findIndex(item => item.id === action.payload.id);
+        if (index !== -1) {
+          state.allItems[index] = { ...state.allItems[index], positionX: action.payload.positionX, positionY: action.payload.positionY };
         }
       });
   }
