@@ -100,6 +100,17 @@
 - Completion statistics
 - Custom widgets
 
+### 3.8 Canvas Workspaces
+- Named workspaces that scope both List View and Mind Map to a subset of initiatives
+- **"All" mode:** no canvas filter — all initiatives are visible across both views
+- Each canvas has a name, optional description, and a color (used as accent in the UI)
+- Initiatives are optionally linked to one canvas (`canvasId` nullable FK)
+- Creating a canvas auto-switches the active workspace to it
+- Deleting a canvas unlinks its initiatives (sets `canvasId = null`) but does not delete them
+- Canvas selection persists in Redux state; both views re-fetch when it changes
+- Pill-tab selector rendered at the top of both List View and Mind Map pages
+- Right-click a canvas pill for Rename / Delete actions
+
 ## 4. Data Models
 
 ### 4.1 Initiative/Node Model
@@ -182,6 +193,27 @@
 }
 ```
 
+### 4.6 Canvas Model
+```javascript
+{
+  id: UUID,
+  name: String (required),
+  description: String (nullable),
+  color: String (hex, default: '#6366f1'),
+  createdById: UUID (foreign key → User),
+  initiatives: Initiative[],   // back-relation
+  createdAt: Timestamp,
+  updatedAt: Timestamp
+}
+```
+`Initiative` gains:
+```javascript
+{
+  canvasId: UUID (nullable, FK → Canvas),
+  // ... existing fields
+}
+```
+
 ## 5. API Endpoints
 
 ### 5.1 Initiatives
@@ -231,6 +263,21 @@ GET    /api/dashboard/upcoming       - Get upcoming deadlines
 GET    /api/dashboard/blocked        - Get blocked items
 ```
 
+### 5.6 Canvases
+```
+GET    /api/canvases                 - List canvases owned by current user (includes _count.initiatives)
+POST   /api/canvases                 - Create new canvas
+PUT    /api/canvases/:id             - Update canvas (owner only)
+DELETE /api/canvases/:id             - Delete canvas; unlinks initiatives first (owner only)
+```
+`GET /api/initiatives` now accepts an optional `canvasId` query parameter:
+```
+GET /api/initiatives?canvasId=<uuid>   - Filter by canvas
+GET /api/initiatives?canvasId=null     - Initiatives with no canvas
+GET /api/initiatives                   - All initiatives (no filter)
+```
+`POST /api/initiatives` and `PUT /api/initiatives/:id` accept optional `canvasId` in the request body.
+
 ## 6. UI/UX Design
 
 ### 6.1 Layout Structure
@@ -257,6 +304,14 @@ GET    /api/dashboard/blocked        - Get blocked items
 - **Next Priority:** Priority queue view
 - **Quick Links:** Saved links library
 - **Settings:** User preferences and configuration
+
+#### Canvas Selector (within List View & Mind Map)
+- Horizontal pill-tab bar positioned above the main content
+- "All" pill (dark/active when no canvas selected)
+- One pill per canvas with color dot and initiative count
+- "+" icon button opens Create Canvas dialog (name + description + color palette)
+- Right-click any canvas pill for Rename / Delete context menu
+- Active canvas stored globally in Redux; switching instantly re-fetches the view
 
 ### 6.3 Key Interactions
 - **Double-click node:** Open details panel
@@ -337,6 +392,19 @@ GET    /api/dashboard/blocked        - Get blocked items
 - [ ] Optional: Electron wrapper for true desktop app
 - [ ] Desktop-specific optimizations (keyboard shortcuts, system tray)
 - [ ] Auto-update mechanism
+
+### Phase 7: Canvas Workspaces ✅ Implemented
+**Duration:** Completed February 2026
+
+- [x] `Canvas` Prisma model with `color`, `description`, `createdById` FK
+- [x] `canvasId` nullable FK added to `Initiative`
+- [x] Database migration applied (`add_canvas`)
+- [x] Full Canvas CRUD API (`/api/canvases`)
+- [x] `GET /api/initiatives` supports `canvasId` query filter
+- [x] `canvasSlice` Redux slice — `fetchCanvases`, `createCanvas`, `updateCanvas`, `deleteCanvas`, `setActiveCanvas`
+- [x] `CanvasSelector` component — pill tabs, create dialog with color picker, right-click rename/delete
+- [x] List View and Mind Map scoped by active canvas
+- [x] New initiatives stamped with `canvasId` of the active canvas
 
 ## 8. Technical Considerations
 
@@ -428,6 +496,6 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 
 ---
 
-**Version:** 1.0  
-**Last Updated:** February 25, 2026  
+**Version:** 1.1  
+**Last Updated:** February 26, 2026  
 **Status:** Draft

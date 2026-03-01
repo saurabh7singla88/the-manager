@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { Box, Typography, Chip, LinearProgress, IconButton, Tooltip } from '@mui/material';
-import { ExpandMore, ExpandLess, OpenInNew } from '@mui/icons-material';
+import { ExpandMore, ExpandLess, OpenInNew, AddCircleOutline } from '@mui/icons-material';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9', border: '#94a3b8' },
@@ -20,13 +20,14 @@ const PRIORITY_COLORS = {
 };
 
 function MindMapNode({ data, selected }) {
-  const { initiative, onToggleCollapse, isCollapsed, onOpenDetails } = data;
+  const { initiative, onToggleCollapse, isCollapsed, onOpenDetails, onAddChild } = data;
   const hasChildren = (initiative._count?.children ?? 0) > 0;
   const sc = STATUS_CONFIG[initiative.status] || STATUS_CONFIG.OPEN;
 
   return (
     <Box
       sx={{
+        position: 'relative',
         bgcolor: 'white',
         border: `1.5px solid ${selected ? '#6366f1' : sc.border}`,
         borderLeft: `4px solid ${PRIORITY_COLORS[initiative.priority] || '#94a3b8'}`,
@@ -43,6 +44,7 @@ function MindMapNode({ data, selected }) {
           boxShadow: '0 4px 16px rgba(0,0,0,0.13)',
           borderColor: selected ? '#6366f1' : '#6366f1',
         },
+        '&:hover .add-child-tip': { opacity: 1, transform: 'translateX(-50%) scale(1)' },
       }}
     >
       <Handle type="target" position={Position.Top} style={{ background: 'transparent', border: 'none' }} />
@@ -108,6 +110,20 @@ function MindMapNode({ data, selected }) {
         />
       </Box>
 
+      {/* Tags */}
+      {initiative.tags?.length > 0 && (
+        <Box display="flex" gap={0.4} mt={0.6} flexWrap="wrap">
+          {initiative.tags.map(tag => (
+            <Box
+              key={tag}
+              sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', fontWeight: 600, fontSize: '0.58rem', px: 0.6, py: 0.1, borderRadius: 1, lineHeight: 1.6 }}
+            >
+              #{tag}
+            </Box>
+          ))}
+        </Box>
+      )}
+
       {/* Progress */}
       {initiative.progress > 0 && (
         <Box mt={0.75}>
@@ -131,7 +147,33 @@ function MindMapNode({ data, selected }) {
         </Typography>
       )}
 
+      {/* Bottom handle + centered "+" tip button */}
       <Handle type="source" position={Position.Bottom} style={{ background: 'transparent', border: 'none' }} />
+      <Tooltip title="Add sub-item" placement="bottom">
+        <IconButton
+          className="add-child-tip"
+          size="small"
+          onClick={(e) => { e.stopPropagation(); onAddChild(initiative.id, initiative.priority); }}
+          sx={{
+            position: 'absolute',
+            bottom: -13,
+            left: '50%',
+            transform: 'translateX(-50%) scale(0.85)',
+            opacity: 0,
+            transition: 'opacity 0.15s, transform 0.15s',
+            width: 22,
+            height: 22,
+            bgcolor: '#6366f1',
+            color: 'white',
+            border: '2px solid white',
+            boxShadow: '0 2px 6px rgba(99,102,241,0.45)',
+            zIndex: 10,
+            '&:hover': { bgcolor: '#4f46e5', transform: 'translateX(-50%) scale(1.1)' },
+          }}
+        >
+          <AddCircleOutline sx={{ fontSize: 13 }} />
+        </IconButton>
+      </Tooltip>
     </Box>
   );
 }

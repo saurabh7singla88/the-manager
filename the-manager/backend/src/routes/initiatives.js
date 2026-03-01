@@ -12,12 +12,17 @@ router.use(authenticate);
 // Get all initiatives (with filtering)
 router.get('/', async (req, res, next) => {
   try {
-    const { status, priority, parentId, search } = req.query;
+    const { status, priority, parentId, search, canvasId } = req.query;
 
     const where = {};
 
     if (status) where.status = status;
     if (priority) where.priority = priority;
+    if (canvasId === 'null') {
+      where.canvasId = null;
+    } else if (canvasId) {
+      where.canvasId = canvasId;
+    }
     
     // If parentId is provided, filter by it; if 'null', get root items
     if (parentId === 'null') {
@@ -176,7 +181,8 @@ router.post('/',
         startDate,
         dueDate,
         tags,
-        assigneeIds
+        assigneeIds,
+        canvasId
       } = req.body;
 
       const data = {
@@ -187,6 +193,7 @@ router.post('/',
         priority: priority || 'MEDIUM',
         createdById: req.user.id,
         ...(parentId && { parentId }),
+        ...(canvasId && { canvasId }),
         ...(startDate && { startDate: new Date(startDate) }),
         ...(dueDate && { dueDate: new Date(dueDate) }),
         ...(tags && { tags })
@@ -280,6 +287,7 @@ router.put('/:id', async (req, res, next) => {
     if (tags !== undefined) data.tags = tags;
     if (positionX !== undefined) data.positionX = positionX;
     if (positionY !== undefined) data.positionY = positionY;
+    if ('canvasId' in req.body) data.canvasId = req.body.canvasId || null;
 
     if (assigneeIds !== undefined) {
       data.assignees = {
@@ -462,6 +470,160 @@ router.patch('/:id/position', async (req, res, next) => {
     next(error);
   }
 });
+
+// ─── Links ────────────────────────────────────────────────────────────────────
+
+// GET /initiatives/:id/links
+router.get('/:id/links', async (req, res, next) => {
+  try {
+    const links = await prisma.link.findMany({
+      where: { initiativeId: req.params.id },
+      include: { createdBy: { select: { id: true, name: true, avatar: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(links);
+  } catch (error) { next(error); }
+});
+
+// POST /initiatives/:id/links
+router.post('/:id/links',
+  body('url').trim().notEmpty().withMessage('URL is required'),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const { url, title, description, category, tags } = req.body;
+      const link = await prisma.link.create({
+        data: {
+          url,
+          title: title || null,
+          description: description || null,
+          category: category || null,
+          tags: tags || [],
+          initiativeId: req.params.id,
+          createdById: req.user.id
+        },
+        include: { createdBy: { select: { id: true, name: true, avatar: true } } }
+      });
+
+      await prisma.activityLog.create({
+        data: { action: 'link_added', initiativeId: req.params.id, userId: req.user.id, changes: { url, title } }
+      });
+
+      res.status(201).json(link);
+    } catch (error) { next(error); }
+  }
+);
+
+// PUT /links/:linkId
+router.put('/links/:linkId', async (req, res, next) => {
+  try {
+    const { url, title, description, category, tags } = req.body;
+    const data = {};
+    if (url !== undefined) data.url = url;
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description;
+    if (category !== undefined) data.category = category;
+    if (tags !== undefined) data.tags = tags;
+
+    const link = await prisma.link.update({
+      where: { id: req.params.linkId },
+      data,
+      include: { createdBy: { select: { id: true, name: true, avatar: true } } }
+    });
+    res.json(link);
+  } catch (error) { next(error); }
+});
+
+// DELETE /links/:linkId
+router.delete('/links/:linkId', async (req, res, next) => {
+  try {
+    await prisma.link.delete({ where: { id: req.params.linkId } });
+    res.json({ message: 'Link deleted' });
+  } catch (error) { next(error); }
+});
+
+// ─── Comments ─────────────────────────────────────────────────────────────────
+
+// GET /initiatives/:id/comments
+router.get('/:id/comments', async (req, res, next) => {
+  try {
+    const comments = await prisma.comment.findMany({
+      where: { initiativeId: req.params.id },
+      include: { user: { select: { id: true, name: true, avatar: true } } },
+      orderBy: { createdAt: 'asc' }
+    });
+    res.json(comments);
+  } catch (error) { next(error); }
+});
+
+// POST /initiatives/:id/comments
+router.post('/:id/comments',
+  body('content').trim().notEmpty().withMessage('Content is required'),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const comment = await prisma.comment.create({
+        data: { content: req.body.content, initiativeId: req.params.id, userId: req.user.id },
+        include: { user: { select: { id: true, name: true, avatar: true } } }
+      });
+
+      await prisma.activityLog.create({
+        data: { action: 'comment_added', initiativeId: req.params.id, userId: req.user.id, changes: { content: req.body.content } }
+      });
+
+      res.status(201).json(comment);
+    } catch (error) { next(error); }
+  }
+);
+
+// PUT /comments/:commentId
+router.put('/comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await prisma.comment.findUnique({ where: { id: req.params.commentId } });
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    if (comment.userId !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+
+    const updated = await prisma.comment.update({
+      where: { id: req.params.commentId },
+      data: { content: req.body.content },
+      include: { user: { select: { id: true, name: true, avatar: true } } }
+    });
+    res.json(updated);
+  } catch (error) { next(error); }
+});
+
+// DELETE /comments/:commentId
+router.delete('/comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await prisma.comment.findUnique({ where: { id: req.params.commentId } });
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    if (comment.userId !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+
+    await prisma.comment.delete({ where: { id: req.params.commentId } });
+    res.json({ message: 'Comment deleted' });
+  } catch (error) { next(error); }
+});
+
+// ─── Activity Log ─────────────────────────────────────────────────────────────
+
+// GET /initiatives/:id/activity
+router.get('/:id/activity', async (req, res, next) => {
+  try {
+    const logs = await prisma.activityLog.findMany({
+      where: { initiativeId: req.params.id },
+      include: { user: { select: { id: true, name: true, avatar: true } } },
+      orderBy: { timestamp: 'desc' },
+      take: 50
+    });
+    res.json(logs);
+  } catch (error) { next(error); }
+});
+
+// ─── Children ─────────────────────────────────────────────────────────────────
 
 // Get children of an initiative
 router.get('/:id/children', async (req, res, next) => {

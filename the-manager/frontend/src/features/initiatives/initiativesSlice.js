@@ -11,6 +11,7 @@ export const fetchInitiatives = createAsyncThunk(
       if (filters.priority) params.append('priority', filters.priority);
       if (filters.parentId !== undefined) params.append('parentId', filters.parentId);
       if (filters.search) params.append('search', filters.search);
+      if (filters.canvasId !== undefined) params.append('canvasId', filters.canvasId);
 
       const response = await api.get(`/initiatives?${params}`);
       return response.data;
@@ -94,9 +95,12 @@ export const updatePriority = createAsyncThunk(
 
 export const fetchAllInitiatives = createAsyncThunk(
   'initiatives/fetchAll_flat',
-  async (_, { rejectWithValue }) => {
+  async (filters = {}, { rejectWithValue }) => {
     try {
-      const response = await api.get('/initiatives');
+      const params = new URLSearchParams();
+      if (filters.canvasId) params.append('canvasId', filters.canvasId);
+      const query = params.toString() ? `?${params}` : '';
+      const response = await api.get(`/initiatives${query}`);
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.error || 'Failed to fetch initiatives');

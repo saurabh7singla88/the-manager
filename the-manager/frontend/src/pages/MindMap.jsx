@@ -14,10 +14,7 @@ import {
   Box,
   Typography,
   Button,
-  Drawer,
   Chip,
-  LinearProgress,
-  Grid,
   IconButton,
   Tooltip,
   CircularProgress,
@@ -30,19 +27,19 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel
+  InputLabel,
+  InputAdornment,
 } from '@mui/material';
-import { Add, List as ListIcon, Close, Refresh } from '@mui/icons-material';
+import { Add, List as ListIcon, Refresh, Label } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchAllInitiatives,
   updatePosition,
-  updateStatus,
-  updatePriority,
   createInitiative,
-  fetchInitiativeById
 } from '../features/initiatives/initiativesSlice';
 import MindMapNode from '../components/MindMapNode';
+import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
+import CanvasSelector from '../components/CanvasSelector';
 
 const NODE_TYPES = { initiative: MindMapNode };
 
@@ -135,12 +132,13 @@ function MindMapInner() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { allItems, allItemsLoading } = useSelector(state => state.initiatives);
+  const { activeCanvasId } = useSelector(state => state.canvas);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [collapsed, setCollapsed] = useState({});
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [selectedInitiative, setSelectedInitiative] = useState(null);
+  const [selectedInitiativeId, setSelectedInitiativeId] = useState(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createParentId, setCreateParentId] = useState(null);
   const [formData, setFormData] = useState({
@@ -148,14 +146,16 @@ function MindMapInner() {
     description: '',
     type: 'INITIATIVE',
     status: 'OPEN',
-    priority: 'MEDIUM'
+    priority: 'MEDIUM',
+    tags: [],
   });
+  const [tagInput, setTagInput] = useState('');
 
   const savePositionTimer = useRef({});
 
   useEffect(() => {
-    dispatch(fetchAllInitiatives());
-  }, [dispatch]);
+    dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }));
+  }, [dispatch, activeCanvasId]);
 
   // Build children map (memoised)
   const childrenOf = useMemo(() => {
@@ -192,8 +192,15 @@ function MindMapInner() {
     };
 
     const handleOpenDetails = (initiative) => {
-      setSelectedInitiative(initiative);
+      setSelectedInitiativeId(initiative.id);
       setDetailsOpen(true);
+    };
+
+    const handleAddChild = (parentId, parentPriority) => {
+      setCreateParentId(parentId);
+      setFormData({ title: '', description: '', type: 'TASK', status: 'OPEN', priority: parentPriority || 'MEDIUM', tags: [] });
+      setTagInput('');
+      setCreateDialogOpen(true);
     };
 
     const rfNodes = allItems
@@ -212,7 +219,8 @@ function MindMapInner() {
             initiative,
             isCollapsed: !!collapsed[initiative.id],
             onToggleCollapse: handleToggleCollapse,
-            onOpenDetails: handleOpenDetails
+            onOpenDetails: handleOpenDetails,
+            onAddChild: handleAddChild
           }
         };
       });
@@ -232,38 +240,43 @@ function MindMapInner() {
     setEdges(rfEdges);
   }, [allItems, collapsed, hiddenIds]);
 
-  const onNodeDragStop = useCallback((_, node) => {
-    // Debounce position saves
-    if (savePositionTimer.current[node.id]) clearTimeout(savePositionTimer.current[node.id]);
-    savePositionTimer.current[node.id] = setTimeout(() => {
-      dispatch(updatePosition({
-        id: node.id,
-        positionX: node.position.x,
-        positionY: node.position.y
-      }));
-    }, 500);
+  const onNodeDragStop = useCallback((_, node, draggedNodes) => {
+    // Save positions for all nodes that moved (supports group drag)
+    const toSave = draggedNodes?.length > 1 ? draggedNodes : [node];
+    toSave.forEach(n => {
+      if (savePositionTimer.current[n.id]) clearTimeout(savePositionTimer.current[n.id]);
+      savePositionTimer.current[n.id] = setTimeout(() => {
+        dispatch(updatePosition({
+          id: n.id,
+          positionX: n.position.x,
+          positionY: n.position.y
+        }));
+      }, 500);
+    });
   }, [dispatch]);
 
-  const onNodeClick = useCallback((_, node) => {
-    setSelectedInitiative(node.data.initiative);
+  const onNodeDoubleClick = useCallback((_, node) => {
+    setSelectedInitiativeId(node.data.initiative.id);
     setDetailsOpen(true);
   }, []);
 
-  const handleStatusChange = async (id, status) => {
-    await dispatch(updateStatus({ id, status }));
-    dispatch(fetchAllInitiatives());
-  };
-
-  const handlePriorityChange = async (id, priority) => {
-    await dispatch(updatePriority({ id, priority }));
-    dispatch(fetchAllInitiatives());
-  };
-
   const handleCreateSubmit = async () => {
-    await dispatch(createInitiative({ ...formData, parentId: createParentId }));
+    await dispatch(createInitiative({ ...formData, parentId: createParentId, ...(activeCanvasId ? { canvasId: activeCanvasId } : {}) }));
     setCreateDialogOpen(false);
-    setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM' });
+    setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [] });
+    setTagInput('');
     dispatch(fetchAllInitiatives());
+  };
+
+  const addFormTag = (tag) => {
+    const trimmed = tag.trim();
+    if (!trimmed || formData.tags.includes(trimmed)) return;
+    setFormData(prev => ({ ...prev, tags: [...prev.tags, trimmed] }));
+    setTagInput('');
+  };
+
+  const removeFormTag = (tag) => {
+    setFormData(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
   };
 
   if (allItemsLoading && !allItems.length) {
@@ -276,6 +289,7 @@ function MindMapInner() {
 
   return (
     <Box sx={{ height: 'calc(100vh - 90px)', display: 'flex', flexDirection: 'column' }}>
+      <CanvasSelector />
       {/* Toolbar */}
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
         <Box>
@@ -287,7 +301,7 @@ function MindMapInner() {
         <Box display="flex" gap={1} alignItems="center">
           <Tooltip title="Refresh">
             <IconButton
-              onClick={() => dispatch(fetchAllInitiatives())}
+              onClick={() => dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }))}
               size="small"
               sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
             >
@@ -306,7 +320,8 @@ function MindMapInner() {
             startIcon={<Add />}
             onClick={() => {
               setCreateParentId(null);
-              setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM' });
+              setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [] });
+              setTagInput('');
               setCreateDialogOpen(true);
             }}
           >
@@ -324,7 +339,11 @@ function MindMapInner() {
           onEdgesChange={onEdgesChange}
           nodeTypes={NODE_TYPES}
           onNodeDragStop={onNodeDragStop}
-          onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
+          selectionOnDrag
+          panOnDrag={[1, 2]}
+          multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+          selectionKeyCode={null}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           minZoom={0.1}
@@ -348,6 +367,11 @@ function MindMapInner() {
               </Box>
             </Panel>
           )}
+          <Panel position="bottom-center">
+            <Box sx={{ bgcolor: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(6px)', border: '1px solid #e2e8f0', borderRadius: 6, px: 1.75, py: 0.5, display: 'flex', gap: 2 }}>
+              <Typography variant="caption" color="text.disabled">Drag canvas to select · Shift+click to add · Double-click to open</Typography>
+            </Box>
+          </Panel>
         </ReactFlow>
       </Box>
 
@@ -376,181 +400,12 @@ function MindMapInner() {
         </Typography>
       </Box>
 
-      {/* Details Drawer */}
-      <Drawer
-        anchor="right"
+      {/* Detail Drawer (full tabs: Overview, Links, Comments, Activity) */}
+      <InitiativeDetailDrawer
         open={detailsOpen}
+        initiativeId={selectedInitiativeId}
         onClose={() => setDetailsOpen(false)}
-        PaperProps={{
-          sx: {
-            width: 360,
-            p: 0,
-            borderLeft: '1px solid #e2e8f0',
-            boxShadow: '-4px 0 24px rgba(0,0,0,0.08)',
-          }
-        }}
-      >
-        {selectedInitiative && (
-          <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {/* Drawer header */}
-            <Box
-              display="flex" justifyContent="space-between" alignItems="flex-start"
-              sx={{ px: 3, py: 2.5, borderBottom: '1px solid #e2e8f0' }}
-            >
-              <Box sx={{ flex: 1, pr: 1 }}>
-                <Typography variant="h6" fontWeight={700} sx={{ wordBreak: 'break-word', lineHeight: 1.3 }}>
-                  {selectedInitiative.title}
-                </Typography>
-                {selectedInitiative.description && (
-                  <Typography variant="body2" color="text.secondary" mt={0.75}>
-                    {selectedInitiative.description}
-                  </Typography>
-                )}
-              </Box>
-              <IconButton size="small" onClick={() => setDetailsOpen(false)} sx={{ mt: -0.5, mr: -0.5 }}>
-                <Close fontSize="small" />
-              </IconButton>
-            </Box>
-
-            {/* Drawer body */}
-            <Box sx={{ flex: 1, overflowY: 'auto', px: 3, py: 2.5 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                    STATUS
-                  </Typography>
-                  <FormControl size="small" fullWidth>
-                    <Select
-                      value={selectedInitiative.status}
-                      onChange={(e) => {
-                        handleStatusChange(selectedInitiative.id, e.target.value);
-                        setSelectedInitiative(prev => ({ ...prev, status: e.target.value }));
-                      }}
-                      sx={{
-                        bgcolor: STATUS_CONFIG[selectedInitiative.status]?.bg || '#f1f5f9',
-                        color: STATUS_CONFIG[selectedInitiative.status]?.color || '#475569',
-                        fontWeight: 600,
-                        '.MuiOutlinedInput-notchedOutline': { border: 'none' },
-                      }}
-                    >
-                      {Object.entries(STATUS_CONFIG).map(([v, cfg]) => (
-                        <MenuItem key={v} value={v}>{cfg.label}</MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Grid>
-
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                    PRIORITY
-                  </Typography>
-                  <FormControl size="small" fullWidth>
-                    <Select
-                      value={selectedInitiative.priority}
-                      onChange={(e) => {
-                        handlePriorityChange(selectedInitiative.id, e.target.value);
-                        setSelectedInitiative(prev => ({ ...prev, priority: e.target.value }));
-                      }}
-                    >
-                      {Object.keys(PRIORITY_COLORS).map(p => (
-                        <MenuItem key={p} value={p} sx={{ color: PRIORITY_COLORS[p], fontWeight: 600 }}>
-                          {p.charAt(0) + p.slice(1).toLowerCase()}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Grid>
-
-                {(selectedInitiative.progress ?? 0) > 0 && (
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                      PROGRESS
-                    </Typography>
-                    <LinearProgress
-                      variant="determinate"
-                      value={selectedInitiative.progress || 0}
-                      sx={{ height: 6, borderRadius: 3, bgcolor: '#e2e8f0' }}
-                      color={selectedInitiative.progress === 100 ? 'success' : 'primary'}
-                    />
-                    <Typography variant="caption" color="text.secondary" mt={0.5} display="block">
-                      {selectedInitiative.progress || 0}%
-                    </Typography>
-                  </Grid>
-                )}
-
-                {selectedInitiative.assignees?.length > 0 && (
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                      ASSIGNEES
-                    </Typography>
-                    <Box display="flex" gap={0.5} flexWrap="wrap">
-                      {selectedInitiative.assignees.map(a => (
-                        <Chip key={a.id} label={a.name} size="small" sx={{ bgcolor: '#f1f5f9' }} />
-                      ))}
-                    </Box>
-                  </Grid>
-                )}
-
-                {selectedInitiative.tags?.length > 0 && (
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                      TAGS
-                    </Typography>
-                    <Box display="flex" gap={0.5} flexWrap="wrap">
-                      {selectedInitiative.tags.map(tag => (
-                        <Chip key={tag} label={tag} size="small" variant="outlined" />
-                      ))}
-                    </Box>
-                  </Grid>
-                )}
-
-                {(selectedInitiative.dueDate || selectedInitiative.startDate) && (
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.5}>
-                      DATES
-                    </Typography>
-                    {selectedInitiative.startDate && (
-                      <Typography variant="caption" display="block" color="text.secondary">
-                        Start: {new Date(selectedInitiative.startDate).toLocaleDateString()}
-                      </Typography>
-                    )}
-                    {selectedInitiative.dueDate && (
-                      <Typography
-                        variant="caption"
-                        display="block"
-                        color={
-                          new Date(selectedInitiative.dueDate) < new Date() && selectedInitiative.status !== 'COMPLETED'
-                            ? 'error.main' : 'text.secondary'
-                        }
-                      >
-                        Due: {new Date(selectedInitiative.dueDate).toLocaleDateString()}
-                      </Typography>
-                    )}
-                  </Grid>
-                )}
-              </Grid>
-            </Box>
-
-            {/* Drawer footer */}
-            <Box sx={{ px: 3, py: 2, borderTop: '1px solid #e2e8f0' }}>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<Add />}
-                fullWidth
-                onClick={() => {
-                  setCreateParentId(selectedInitiative.id);
-                  setFormData({ title: '', description: '', type: 'TASK', status: 'OPEN', priority: selectedInitiative.priority });
-                  setCreateDialogOpen(true);
-                  setDetailsOpen(false);
-                }}
-              >
-                Add Child Item
-              </Button>
-            </Box>
-          </Box>
-        )}
-      </Drawer>
+      />
 
       {/* Create Initiative Dialog */}
       <Dialog
@@ -565,28 +420,24 @@ function MindMapInner() {
         </DialogTitle>
         <Divider />
         <DialogContent>
-          <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Title"
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                required
-                autoFocus
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                multiline
-                rows={3}
-                label="Description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              />
-            </Grid>
-            <Grid item xs={6}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 0.5 }}>
+            <TextField
+              fullWidth
+              label="Title"
+              value={formData.title}
+              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              required
+              autoFocus
+            />
+            <TextField
+              fullWidth
+              multiline
+              rows={3}
+              label="Description"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            />
+            <Box display="flex" gap={2}>
               <FormControl fullWidth size="small">
                 <InputLabel>Type</InputLabel>
                 <Select
@@ -599,8 +450,6 @@ function MindMapInner() {
                   <MenuItem value="SUBTASK">Subtask</MenuItem>
                 </Select>
               </FormControl>
-            </Grid>
-            <Grid item xs={6}>
               <FormControl fullWidth size="small">
                 <InputLabel>Priority</InputLabel>
                 <Select
@@ -614,8 +463,45 @@ function MindMapInner() {
                   <MenuItem value="LOW">Low</MenuItem>
                 </Select>
               </FormControl>
-            </Grid>
-          </Grid>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                TAGS
+              </Typography>
+              <Box display="flex" flexWrap="wrap" gap={0.5} mb={0.75}>
+                {formData.tags.map(tag => (
+                  <Chip
+                    key={tag}
+                    label={tag}
+                    size="small"
+                    onDelete={() => removeFormTag(tag)}
+                    sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', border: 0, fontWeight: 500, fontSize: '0.72rem' }}
+                  />
+                ))}
+              </Box>
+              <TextField
+                size="small"
+                fullWidth
+                placeholder="Type a tag and press Enter or comma…"
+                value={tagInput}
+                onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addFormTag(tagInput);
+                  }
+                }}
+                onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
+                    </InputAdornment>
+                  )
+                }}
+              />
+            </Box>
+          </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setCreateDialogOpen(false)} variant="outlined">Cancel</Button>

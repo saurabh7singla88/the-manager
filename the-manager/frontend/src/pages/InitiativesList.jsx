@@ -1,19 +1,21 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import CanvasSelector from '../components/CanvasSelector';
 import api from '../api/axios';
 import {
   Box, Typography, Button, IconButton, Chip,
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Select, MenuItem, FormControl, InputLabel,
-  Grid, CircularProgress, Divider, Tooltip
+  Grid, CircularProgress, Divider, Tooltip, InputAdornment
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label } from '@mui/icons-material';
 import {
   fetchInitiatives, createInitiative, updateInitiative,
-  deleteInitiative, updateStatus, updatePriority, fetchInitiativeById
+  deleteInitiative, updateStatus, updatePriority
 } from '../features/initiatives/initiativesSlice';
 import { format } from 'date-fns';
+import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -36,9 +38,9 @@ const TYPE_LABELS = { INITIATIVE: 'Initiative', TASK: 'Task', SUBTASK: 'Subtask'
 export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { items, loading, selectedInitiative } = useSelector((state) => state.initiatives);
+  const { items, loading } = useSelector((state) => state.initiatives);
+  const { activeCanvasId } = useSelector((state) => state.canvas);
   const [openDialog, setOpenDialog] = useState(false);
-  const [detailsDialog, setDetailsDialog] = useState(false);
   const [expanded, setExpanded] = useState({});
   const [formData, setFormData] = useState({
     title: '',
@@ -46,15 +48,46 @@ export default function InitiativesList() {
     type: 'INITIATIVE',
     status: 'OPEN',
     priority: 'MEDIUM',
-    parentId: null
+    parentId: null,
+    tags: [],
   });
+  const [tagInput, setTagInput] = useState('');
   const [editingId, setEditingId] = useState(null);
-  const [childrenMap, setChildrenMap] = useState({}); // { [parentId]: initiative[] }
+  const [childrenMap, setChildrenMap] = useState({});
   const [loadingChildren, setLoadingChildren] = useState({});
 
-  useEffect(() => {
-    dispatch(fetchInitiatives({ parentId: 'null' }));
+  // Detail drawer
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerInitiativeId, setDrawerInitiativeId] = useState(null);
+
+  // Search + filters
+  const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterPriority, setFilterPriority] = useState('');
+  const searchTimer = useRef(null);
+
+  const doFetch = useCallback((search, status, priority, canvasId) => {
+    dispatch(fetchInitiatives({
+      parentId: 'null',
+      ...(search && { search }),
+      ...(status && { status }),
+      ...(priority && { priority }),
+      ...(canvasId !== undefined && canvasId !== null ? { canvasId } : {}),
+    }));
   }, [dispatch]);
+
+  useEffect(() => {
+    doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
+  }, [filterStatus, filterPriority, activeCanvasId]); // eslint-disable-line
+
+  useEffect(() => {
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
+    }, 300);
+  }, [searchText]); // eslint-disable-line
+
+  // Initial fetch handled by the combined effect above
 
   const handleOpenDialog = (parentId = null, initiative = null) => {
     if (initiative) {
@@ -64,7 +97,8 @@ export default function InitiativesList() {
         type: initiative.type,
         status: initiative.status,
         priority: initiative.priority,
-        parentId: initiative.parentId
+        parentId: initiative.parentId,
+        tags: initiative.tags || [],
       });
       setEditingId(initiative.id);
     } else {
@@ -74,10 +108,12 @@ export default function InitiativesList() {
         type: parentId ? 'TASK' : 'INITIATIVE',
         status: 'OPEN',
         priority: 'MEDIUM',
-        parentId
+        parentId,
+        tags: [],
       });
       setEditingId(null);
     }
+    setTagInput('');
     setOpenDialog(true);
   };
 
@@ -89,9 +125,22 @@ export default function InitiativesList() {
       type: 'INITIATIVE',
       status: 'OPEN',
       priority: 'MEDIUM',
-      parentId: null
+      parentId: null,
+      tags: [],
     });
+    setTagInput('');
     setEditingId(null);
+  };
+
+  const addFormTag = (tag) => {
+    const trimmed = tag.trim();
+    if (!trimmed || formData.tags.includes(trimmed)) return;
+    setFormData(prev => ({ ...prev, tags: [...prev.tags, trimmed] }));
+    setTagInput('');
+  };
+
+  const removeFormTag = (tag) => {
+    setFormData(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
   };
 
   const fetchChildren = useCallback(async (id) => {
@@ -107,19 +156,16 @@ export default function InitiativesList() {
   }, []);
 
   const handleSubmit = async () => {
-    const parentId = formData.parentId; // capture before dialog closes and resets formData
+    const parentId = formData.parentId;
     if (editingId) {
       await dispatch(updateInitiative({ id: editingId, data: formData }));
     } else {
-      await dispatch(createInitiative(formData));
+      await dispatch(createInitiative({ ...formData, ...(activeCanvasId ? { canvasId: activeCanvasId } : {}) }));
     }
     handleCloseDialog();
-    // Refresh root list (updates _count on parent items)
-    dispatch(fetchInitiatives({ parentId: 'null' }));
-    // If it was a child, also refresh that parent's children in the map
+    doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
     if (parentId) {
       fetchChildren(parentId);
-      // Auto-expand the parent
       setExpanded(prev => ({ ...prev, [parentId]: true }));
     }
   };
@@ -127,7 +173,7 @@ export default function InitiativesList() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this initiative and all its children?')) {
       await dispatch(deleteInitiative(id));
-      dispatch(fetchInitiatives({ parentId: 'null' }));
+      doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
     }
   };
 
@@ -139,9 +185,9 @@ export default function InitiativesList() {
     await dispatch(updatePriority({ id, priority }));
   };
 
-  const handleViewDetails = async (id) => {
-    await dispatch(fetchInitiativeById(id));
-    setDetailsDialog(true);
+  const handleViewDetails = (id) => {
+    setDrawerInitiativeId(id);
+    setDrawerOpen(true);
   };
 
   const toggleExpand = (id) => {
@@ -247,12 +293,29 @@ export default function InitiativesList() {
                 </Typography>
               )}
             </Box>
+            {initiative.tags?.length > 0 && (
+              <Box display="flex" gap={0.5} mt={0.75} flexWrap="wrap">
+                {initiative.tags.map(tag => (
+                  <Chip
+                    key={tag}
+                    label={tag}
+                    size="small"
+                    sx={{ height: 18, fontSize: '0.65rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0, fontWeight: 500 }}
+                  />
+                ))}
+              </Box>
+            )}
           </Box>
 
           {/* Actions */}
           <Box display="flex" gap={0.25} flexShrink={0}>
+            <Tooltip title="View details">
+              <IconButton size="small" onClick={() => handleViewDetails(initiative.id)} sx={{ color: 'primary.main' }}>
+                <Visibility sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Add sub-item">
-              <IconButton size="small" onClick={() => handleOpenDialog(initiative.id)} sx={{ color: 'primary.main' }}>
+              <IconButton size="small" onClick={() => handleOpenDialog(initiative.id)} sx={{ color: 'text.secondary' }}>
                 <AddCircleOutline sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
@@ -289,7 +352,8 @@ export default function InitiativesList() {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={4}>
+      <CanvasSelector />
+      <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
         <Box>
           <Typography variant="h4" fontWeight={700}>Initiatives</Typography>
           <Typography variant="body2" color="text.secondary" mt={0.5}>
@@ -312,6 +376,67 @@ export default function InitiativesList() {
             New Initiative
           </Button>
         </Box>
+      </Box>
+
+      {/* Search + Filter Row */}
+      <Box display="flex" gap={1.5} mb={3} flexWrap="wrap" alignItems="center">
+        <TextField
+          size="small"
+          placeholder="Search initiatives…"
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          sx={{ flex: 1, minWidth: 200 }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search sx={{ fontSize: 18, color: 'text.disabled' }} />
+              </InputAdornment>
+            ),
+            endAdornment: searchText ? (
+              <InputAdornment position="end">
+                <IconButton size="small" onClick={() => setSearchText('')}><Clear sx={{ fontSize: 14 }} /></IconButton>
+              </InputAdornment>
+            ) : null,
+          }}
+        />
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel>Status</InputLabel>
+          <Select
+            value={filterStatus}
+            label="Status"
+            onChange={e => setFilterStatus(e.target.value)}
+          >
+            <MenuItem value="">All statuses</MenuItem>
+            {Object.entries(STATUS_CONFIG).map(([v, c]) => (
+              <MenuItem key={v} value={v}>{c.label}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel>Priority</InputLabel>
+          <Select
+            value={filterPriority}
+            label="Priority"
+            onChange={e => setFilterPriority(e.target.value)}
+          >
+            <MenuItem value="">All priorities</MenuItem>
+            {Object.entries(PRIORITY_CONFIG).map(([v, c]) => (
+              <MenuItem key={v} value={v} sx={{ color: c.color, fontWeight: 600 }}>
+                {v.charAt(0) + v.slice(1).toLowerCase()}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        {(filterStatus || filterPriority || searchText) && (
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Clear />}
+            onClick={() => { setSearchText(''); setFilterStatus(''); setFilterPriority(''); }}
+          >
+            Clear
+          </Button>
+        )}
       </Box>
 
       {items.length === 0 ? (
@@ -404,6 +529,43 @@ export default function InitiativesList() {
                 </Select>
               </FormControl>
             </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                TAGS
+              </Typography>
+              <Box display="flex" flexWrap="wrap" gap={0.5} mb={0.75}>
+                {formData.tags.map(tag => (
+                  <Chip
+                    key={tag}
+                    label={tag}
+                    size="small"
+                    onDelete={() => removeFormTag(tag)}
+                    sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', border: 0, fontWeight: 500, fontSize: '0.72rem' }}
+                  />
+                ))}
+              </Box>
+              <TextField
+                size="small"
+                fullWidth
+                placeholder="Type a tag and press Enter or comma…"
+                value={tagInput}
+                onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addFormTag(tagInput);
+                  }
+                }}
+                onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
+                    </InputAdornment>
+                  )
+                }}
+              />
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -414,56 +576,12 @@ export default function InitiativesList() {
         </DialogActions>
       </Dialog>
 
-      {/* Details Dialog */}
-      <Dialog open={detailsDialog} onClose={() => setDetailsDialog(false)} maxWidth="md" fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}
-      >
-        <DialogTitle sx={{ fontWeight: 700 }}>Initiative Details</DialogTitle>
-        <Divider />
-        <DialogContent sx={{ pt: 2 }}>
-          {selectedInitiative && (
-            <Box>
-              <Typography variant="h6" fontWeight={700} gutterBottom>{selectedInitiative.title}</Typography>
-              {selectedInitiative.description && (
-                <Typography variant="body2" color="text.secondary" paragraph>{selectedInitiative.description}</Typography>
-              )}
-              <Grid container spacing={2} mt={0.5}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Status</Typography>
-                  {(() => { const sc = STATUS_CONFIG[selectedInitiative.status] || STATUS_CONFIG.OPEN; return (
-                    <Chip label={sc.label} size="small" sx={{ bgcolor: sc.bg, color: sc.color, fontWeight: 500, border: 0 }} />
-                  ); })()}
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Priority</Typography>
-                  {(() => { const pc = PRIORITY_CONFIG[selectedInitiative.priority] || PRIORITY_CONFIG.MEDIUM; return (
-                    <Chip label={selectedInitiative.priority} size="small" sx={{ bgcolor: pc.bg, color: pc.color, fontWeight: 500, border: 0 }} />
-                  ); })()}
-                </Grid>
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.5}>Progress</Typography>
-                  <Typography variant="body2">{selectedInitiative.progress ?? 0}%</Typography>
-                </Grid>
-                {selectedInitiative.children?.length > 0 && (
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={500} display="block" mb={0.75}>
-                      Sub-items ({selectedInitiative.children.length})
-                    </Typography>
-                    <Box display="flex" flexWrap="wrap" gap={0.75}>
-                      {selectedInitiative.children.map(child => (
-                        <Chip key={child.id} label={child.title} size="small" sx={{ bgcolor: '#f1f5f9' }} />
-                      ))}
-                    </Box>
-                  </Grid>
-                )}
-              </Grid>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDetailsDialog(false)} variant="outlined">Close</Button>
-        </DialogActions>
-      </Dialog>
+      {/* Detail Drawer */}
+      <InitiativeDetailDrawer
+        open={drawerOpen}
+        initiativeId={drawerInitiativeId}
+        onClose={() => setDrawerOpen(false)}
+      />
     </Box>
   );
 }
