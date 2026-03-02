@@ -40,7 +40,10 @@ const EMPTY_FORM = {
 export default function Tasks() {
   const dispatch = useDispatch();
   const { tasks, tasksLoading } = useSelector(s => s.initiatives);
-  const { activeCanvasId, canvases } = useSelector(s => s.canvas);
+  const { activeCanvasId, canvases } = useSelector(s => ({
+    activeCanvasId: s.canvas.activeCanvasId.tasks,
+    canvases: s.canvas.canvases,
+  }));
 
   // Search / filter
   const [search, setSearch] = useState('');
@@ -215,7 +218,7 @@ export default function Tasks() {
   // ── Render ──────────────────────────────────────────────
   return (
     <Box>
-      <CanvasSelector />
+      <CanvasSelector screen="tasks" />
 
       {/* Header */}
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>

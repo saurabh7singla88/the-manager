@@ -16,9 +16,11 @@ const PALETTE = [
   '#3b82f6', '#64748b',
 ];
 
-export default function CanvasSelector() {
+export default function CanvasSelector({ screen }) {
   const dispatch = useDispatch();
-  const { canvases, activeCanvasId, loading } = useSelector(s => s.canvas);
+  const canvases = useSelector(s => s.canvas.canvases);
+  const activeCanvasId = useSelector(s => s.canvas.activeCanvasId[screen] ?? null);
+  const loading = useSelector(s => s.canvas.loading);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editCanvas, setEditCanvas] = useState(null); // canvas object being edited
@@ -59,7 +61,9 @@ export default function CanvasSelector() {
       if (editCanvas) {
         await dispatch(updateCanvas({ id: editCanvas.id, data: { name: formName.trim(), description: formDesc.trim() || null, color: formColor } }));
       } else {
-        await dispatch(createCanvas({ name: formName.trim(), description: formDesc.trim() || null, color: formColor }));
+        const result = await dispatch(createCanvas({ name: formName.trim(), description: formDesc.trim() || null, color: formColor })).unwrap();
+        // Auto-switch only this screen to the newly created canvas
+        dispatch(setActiveCanvas({ screen, canvasId: result.id }));
       }
       setCreateOpen(false);
     } finally {
@@ -98,7 +102,7 @@ export default function CanvasSelector() {
       <Chip
         label="All"
         size="small"
-        onClick={() => dispatch(setActiveCanvas(null))}
+        onClick={() => dispatch(setActiveCanvas({ screen, canvasId: null }))}
         sx={{
           height: 26,
           fontSize: '0.75rem',
@@ -131,7 +135,7 @@ export default function CanvasSelector() {
               </Box>
             }
             size="small"
-            onClick={() => dispatch(setActiveCanvas(canvas.id))}
+            onClick={() => dispatch(setActiveCanvas({ screen, canvasId: canvas.id }))}
             onContextMenu={(e) => {
               e.preventDefault();
               setMenuCanvas(canvas);

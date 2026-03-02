@@ -41,7 +41,10 @@ export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { items, loading } = useSelector((state) => state.initiatives);
-  const { activeCanvasId, canvases } = useSelector((state) => state.canvas);
+  const { activeCanvasId, canvases } = useSelector((state) => ({
+    activeCanvasId: state.canvas.activeCanvasId.initiatives,
+    canvases: state.canvas.canvases,
+  }));
   const [openDialog, setOpenDialog] = useState(false);
   const [expanded, setExpanded] = useState({});
   const [formData, setFormData] = useState({
@@ -404,7 +407,7 @@ export default function InitiativesList() {
 
   return (
     <Box>
-      <CanvasSelector />
+      <CanvasSelector screen="initiatives" />
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
         <Box>
           <Typography variant="h4" fontWeight={700}>Initiatives</Typography>

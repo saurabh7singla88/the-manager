@@ -53,13 +53,19 @@ const canvasSlice = createSlice({
   name: 'canvas',
   initialState: {
     canvases: [],
-    activeCanvasId: null, // null = "All" (no filter)
+    // Per-screen active canvas — changing one screen never affects another
+    activeCanvasId: {
+      initiatives: null,
+      mindmap: null,
+      tasks: null,
+    },
     loading: false,
     error: null,
   },
   reducers: {
     setActiveCanvas(state, action) {
-      state.activeCanvasId = action.payload; // null = All
+      const { screen, canvasId } = action.payload;
+      state.activeCanvasId[screen] = canvasId;
     },
   },
   extraReducers: (builder) => {
@@ -75,7 +81,7 @@ const canvasSlice = createSlice({
       })
       .addCase(createCanvas.fulfilled, (state, action) => {
         state.canvases.push(action.payload);
-        state.activeCanvasId = action.payload.id; // auto-switch to new canvas
+        // auto-switch is handled in CanvasSelector (per screen)
       })
       .addCase(updateCanvas.fulfilled, (state, action) => {
         const idx = state.canvases.findIndex(c => c.id === action.payload.id);
@@ -83,7 +89,11 @@ const canvasSlice = createSlice({
       })
       .addCase(deleteCanvas.fulfilled, (state, action) => {
         state.canvases = state.canvases.filter(c => c.id !== action.payload);
-        if (state.activeCanvasId === action.payload) state.activeCanvasId = null;
+        // Reset any screen that had the deleted canvas active
+        Object.keys(state.activeCanvasId).forEach(screen => {
+          if (state.activeCanvasId[screen] === action.payload)
+            state.activeCanvasId[screen] = null;
+        });
       });
   }
 });

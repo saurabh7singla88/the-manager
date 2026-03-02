@@ -141,7 +141,7 @@ function MindMapInner() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { allItems, allItemsLoading } = useSelector(state => state.initiatives);
-  const { activeCanvasId } = useSelector(state => state.canvas);
+  const { activeCanvasId } = useSelector(state => ({ activeCanvasId: state.canvas.activeCanvasId.mindmap }));
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -547,7 +547,7 @@ function MindMapInner() {
 
   return (
     <Box sx={{ height: 'calc(100vh - 90px)', display: 'flex', flexDirection: 'column' }}>
-      <CanvasSelector />
+      <CanvasSelector screen="mindmap" />
       {/* Toolbar */}
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
         <Box>
