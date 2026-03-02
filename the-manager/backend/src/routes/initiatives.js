@@ -12,12 +12,13 @@ router.use(authenticate);
 // Get all initiatives (with filtering)
 router.get('/', async (req, res, next) => {
   try {
-    const { status, priority, parentId, search, canvasId } = req.query;
+    const { status, priority, parentId, search, canvasId, isStandaloneTask } = req.query;
 
     const where = {};
 
     if (status) where.status = status;
     if (priority) where.priority = priority;
+    if (isStandaloneTask === 'true') where.isStandaloneTask = true;
 
     // Canvas filter: when canvasId is given and no parentId filter (flat fetch for mind map),
     // include the canvas items AND all their descendants (children lack canvasId on their own).
@@ -71,27 +72,16 @@ router.get('/', async (req, res, next) => {
       where,
       include: {
         createdBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            avatar: true
-          }
+          select: { id: true, name: true, email: true, avatar: true }
         },
         assignees: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            avatar: true
-          }
+          select: { id: true, name: true, email: true, avatar: true }
+        },
+        linkedInitiative: {
+          select: { id: true, title: true }
         },
         _count: {
-          select: {
-            children: true,
-            comments: true,
-            links: true
-          }
+          select: { children: true, comments: true, links: true }
         }
       },
       orderBy: [
@@ -211,7 +201,9 @@ router.post('/',
         dueDate,
         tags,
         assigneeIds,
-        canvasId
+        canvasId,
+        isStandaloneTask,
+        linkedInitiativeId
       } = req.body;
 
       const data = {
@@ -223,6 +215,8 @@ router.post('/',
         createdById: req.user.id,
         ...(parentId && { parentId }),
         ...(canvasId && { canvasId }),
+        ...(isStandaloneTask !== undefined && { isStandaloneTask: Boolean(isStandaloneTask) }),
+        ...(linkedInitiativeId && { linkedInitiativeId }),
         ...(startDate && { startDate: new Date(startDate) }),
         ...(dueDate && { dueDate: new Date(dueDate) }),
         ...(tags && { tags })
@@ -317,6 +311,8 @@ router.put('/:id', async (req, res, next) => {
     if (positionX !== undefined) data.positionX = positionX;
     if (positionY !== undefined) data.positionY = positionY;
     if ('canvasId' in req.body) data.canvasId = req.body.canvasId || null;
+    if ('linkedInitiativeId' in req.body) data.linkedInitiativeId = req.body.linkedInitiativeId || null;
+    if ('isStandaloneTask' in req.body) data.isStandaloneTask = Boolean(req.body.isStandaloneTask);
 
     if (assigneeIds !== undefined) {
       data.assignees = {

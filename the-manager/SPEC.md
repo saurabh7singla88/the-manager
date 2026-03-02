@@ -111,6 +111,19 @@
 - Pill-tab selector rendered at the top of both List View and Mind Map pages
 - Right-click a canvas pill for Rename / Delete actions
 
+### 3.9 Tasks View
+**Architecture decision: reuse the `Initiative` table** (no separate table)
+- Rationale: `type: 'TASK'` already exists; canvas, links, comments, activity, and tags work out of the box; a separate table would duplicate ~80% of the schema
+- A standalone task is an `Initiative` record with `type = 'TASK'`, `parentId = null`, and `isStandaloneTask = true`
+- Tasks optionally reference an initiative via `linkedInitiativeId` (separate from `parentId`) — they remain independent but carry context
+- **Dedicated Tasks page** separate from the hierarchical Initiatives list
+- **Checkbox UI** — checking a task sets `status = 'COMPLETED'`; unchecking sets it back to `'OPEN'`
+- **Canvas scoping** — same `CanvasSelector` pill bar; tasks are filtered by `canvasId` like initiatives
+- **Grouping** — tasks grouped by: Linked Initiative, Canvas, Priority, or Due Date (user-selectable)
+- **Quick-add** — single-line input at the top to create a task instantly (title only, rest optional)
+- Task detail opens in the same `InitiativeDetailDrawer` (links, comments, activity all available)
+- Tasks are **not** shown in the Mind Map view (they are not spatial/hierarchical nodes)
+
 ## 4. Data Models
 
 ### 4.1 Initiative/Node Model
@@ -119,15 +132,18 @@
   id: UUID,
   title: String (required),
   description: String (rich text),
-  type: Enum ['initiative', 'task', 'subtask'],
+  type: Enum ['INITIATIVE', 'TASK', 'SUBTASK'],
+  isStandaloneTask: Boolean (default: false),  // true = appears in Tasks view
+  linkedInitiativeId: UUID (nullable),         // optional initiative context for standalone tasks
   parentId: UUID (nullable),
-  status: Enum ['open', 'in_progress', 'blocked', 'on_hold', 'completed', 'cancelled'],
-  priority: Enum ['critical', 'high', 'medium', 'low'],
+  status: Enum ['OPEN', 'IN_PROGRESS', 'BLOCKED', 'ON_HOLD', 'COMPLETED', 'CANCELLED'],
+  priority: Enum ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
   assignees: Array<UserId>,
   dueDate: Date (nullable),
   startDate: Date (nullable),
   progress: Number (0-100),
   tags: Array<String>,
+  canvasId: UUID (nullable, FK → Canvas),
   position: Object { x: Number, y: Number }, // for mind map view
   createdAt: Timestamp,
   updatedAt: Timestamp,
@@ -219,9 +235,12 @@
 ### 5.1 Initiatives
 ```
 GET    /api/initiatives              - Get all initiatives (with filters)
+                                       ?isStandaloneTask=true  – Tasks view fetch
+                                       ?canvasId=<uuid>        – Canvas filter
+                                       ?linkedInitiativeId=<id>– Tasks linked to an initiative
 GET    /api/initiatives/:id          - Get single initiative with details
-POST   /api/initiatives              - Create new initiative
-PUT    /api/initiatives/:id          - Update initiative
+POST   /api/initiatives              - Create new initiative or standalone task
+PUT    /api/initiatives/:id          - Update initiative / task
 DELETE /api/initiatives/:id          - Delete initiative
 GET    /api/initiatives/:id/children - Get child initiatives
 GET    /api/initiatives/:id/path     - Get full hierarchy path
@@ -299,7 +318,8 @@ GET /api/initiatives                   - All initiatives (no filter)
 ### 6.2 Navigation
 - **Dashboard:** Overview and metrics
 - **Mind Map:** Visual graph view
-- **List View:** Traditional TODO list
+- **List View:** Hierarchical initiatives list
+- **Tasks:** Standalone tasks with checkbox completion and canvas scoping
 - **My Tasks:** User's assigned items
 - **Next Priority:** Priority queue view
 - **Quick Links:** Saved links library
@@ -406,6 +426,20 @@ GET /api/initiatives                   - All initiatives (no filter)
 - [x] List View and Mind Map scoped by active canvas
 - [x] New initiatives stamped with `canvasId` of the active canvas
 
+### Phase 8: Tasks View
+**Duration:** In progress – March 2026
+
+- [ ] `isStandaloneTask Boolean` field added to `Initiative` schema
+- [ ] `linkedInitiativeId String?` field added to `Initiative` schema (self-relation, nullable)
+- [ ] DB migration applied
+- [ ] `GET /api/initiatives?isStandaloneTask=true` filter in backend
+- [ ] `linkedInitiativeId` accepted in POST/PUT
+- [ ] `Tasks.jsx` page — quick-add bar, checkbox rows, canvas selector, grouping toggle
+- [ ] Sidebar nav updated to include Tasks link
+- [ ] `initiativesSlice` — `fetchTasks` thunk
+- [ ] Task detail opens in `InitiativeDetailDrawer` (full links/comments/activity)
+- [ ] `linkedInitiativeId` picker in task create/edit (shows list of INITIATIVE-type items)
+
 ## 8. Technical Considerations
 
 ### 8.1 Performance
@@ -496,6 +530,6 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 
 ---
 
-**Version:** 1.1  
-**Last Updated:** February 26, 2026  
+**Version:** 1.2  
+**Last Updated:** March 2, 2026  
 **Status:** Draft

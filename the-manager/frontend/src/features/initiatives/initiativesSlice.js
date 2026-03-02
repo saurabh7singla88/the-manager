@@ -120,9 +120,28 @@ export const updatePosition = createAsyncThunk(
   }
 );
 
+export const fetchTasks = createAsyncThunk(
+  'initiatives/fetchTasks',
+  async (filters = {}, { rejectWithValue }) => {
+    try {
+      const params = new URLSearchParams();
+      params.append('isStandaloneTask', 'true');
+      if (filters.canvasId) params.append('canvasId', filters.canvasId);
+      if (filters.status) params.append('status', filters.status);
+      if (filters.search) params.append('search', filters.search);
+      const response = await api.get(`/initiatives?${params}`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to fetch tasks');
+    }
+  }
+);
+
 const initialState = {
   items: [],
   allItems: [],
+  tasks: [],
+  tasksLoading: false,
   selectedInitiative: null,
   loading: false,
   allItemsLoading: false,
@@ -212,6 +231,17 @@ const initiativesSlice = createSlice({
       })
       .addCase(fetchAllInitiatives.rejected, (state) => {
         state.allItemsLoading = false;
+      })
+      // Fetch tasks
+      .addCase(fetchTasks.pending, (state) => {
+        state.tasksLoading = true;
+      })
+      .addCase(fetchTasks.fulfilled, (state, action) => {
+        state.tasksLoading = false;
+        state.tasks = action.payload;
+      })
+      .addCase(fetchTasks.rejected, (state) => {
+        state.tasksLoading = false;
       })
       // Update position
       .addCase(updatePosition.fulfilled, (state, action) => {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import CanvasSelector from '../components/CanvasSelector';
@@ -7,9 +7,11 @@ import {
   Box, Typography, Button, IconButton, Chip,
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Select, MenuItem, FormControl, InputLabel,
-  Grid, CircularProgress, Divider, Tooltip, InputAdornment
+  Grid, CircularProgress, Divider, Tooltip, InputAdornment,
+  Autocomplete
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd } from '@mui/icons-material';
+import { Avatar, AvatarGroup } from '@mui/material';
 import {
   fetchInitiatives, createInitiative, updateInitiative,
   deleteInitiative, updateStatus, updatePriority
@@ -53,7 +55,13 @@ export default function InitiativesList() {
   });
   const [tagInput, setTagInput] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [users, setUsers] = useState([]);
   const [childrenMap, setChildrenMap] = useState({});
+
+  const allTags = useMemo(
+    () => [...new Set((items || []).flatMap(i => i.tags || []))].sort(),
+    [items]
+  );
   const [loadingChildren, setLoadingChildren] = useState({});
 
   // Detail drawer
@@ -65,6 +73,33 @@ export default function InitiativesList() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
   const searchTimer = useRef(null);
+
+  // Quick user create
+  const [quickUserOpen, setQuickUserOpen] = useState(false);
+  const [quickUserName, setQuickUserName] = useState('');
+  const [quickUserRole, setQuickUserRole] = useState('VIEWER');
+  const [quickUserSaving, setQuickUserSaving] = useState(false);
+
+  useEffect(() => {
+    api.get('/users').then(r => setUsers(r.data)).catch(() => {});
+  }, []);
+
+  const handleQuickCreateUser = async (onCreated) => {
+    if (!quickUserName.trim()) return;
+    setQuickUserSaving(true);
+    try {
+      const r = await api.post('/users', { name: quickUserName.trim(), role: quickUserRole });
+      setUsers(prev => [...prev, r.data].sort((a, b) => a.name.localeCompare(b.name)));
+      onCreated(r.data.id);
+      setQuickUserOpen(false);
+      setQuickUserName('');
+      setQuickUserRole('VIEWER');
+    } catch (err) {
+      console.error('Failed to create user', err);
+    } finally {
+      setQuickUserSaving(false);
+    }
+  };
 
   const doFetch = useCallback((search, status, priority, canvasId) => {
     dispatch(fetchInitiatives({
@@ -100,6 +135,7 @@ export default function InitiativesList() {
         parentId: initiative.parentId,
         tags: initiative.tags || [],
         canvasId: initiative.canvasId || null,
+        assigneeIds: initiative.assignees?.map(a => a.id) || [],
       });
       setEditingId(initiative.id);
     } else {
@@ -112,6 +148,7 @@ export default function InitiativesList() {
         parentId,
         tags: [],
         canvasId: activeCanvasId || null,
+        assigneeIds: [],
       });
       setEditingId(null);
     }
@@ -130,6 +167,7 @@ export default function InitiativesList() {
       parentId: null,
       tags: [],
       canvasId: null,
+      assigneeIds: [],
     });
     setTagInput('');
     setEditingId(null);
@@ -294,6 +332,17 @@ export default function InitiativesList() {
                 <Typography variant="caption" color="text.disabled">
                   · {format(new Date(initiative.createdAt), 'MMM d')}
                 </Typography>
+              )}
+              {initiative.assignees?.length > 0 && (
+                <AvatarGroup max={5} sx={{ justifyContent: 'flex-start', '& .MuiAvatar-root': { width: 20, height: 20, fontSize: '0.58rem', border: '2px solid white' } }}>
+                  {initiative.assignees.map(a => (
+                    <Tooltip key={a.id} title={a.name}>
+                      <Avatar sx={{ bgcolor: '#6366f1', width: 20, height: 20, fontSize: '0.58rem' }}>
+                        {a.name.charAt(0).toUpperCase()}
+                      </Avatar>
+                    </Tooltip>
+                  ))}
+                </AvatarGroup>
               )}
             </Box>
             {initiative.tags?.length > 0 && (
@@ -555,6 +604,55 @@ export default function InitiativesList() {
               </Grid>
             )}
             <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Assignees</InputLabel>
+                <Select
+                  multiple
+                  value={formData.assigneeIds || []}
+                  label="Assignees"
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (Array.isArray(v) && v.includes('__create__')) {
+                      setQuickUserOpen(true);
+                      return;
+                    }
+                    setFormData({ ...formData, assigneeIds: v });
+                  }}
+                  renderValue={(selected) => (
+                    <Box display="flex" flexWrap="wrap" gap={0.5}>
+                      {selected.map(id => {
+                        const u = users.find(u => u.id === id);
+                        return u ? (
+                          <Box key={id} display="flex" alignItems="center" gap={0.4}
+                            sx={{ bgcolor: '#eff6ff', borderRadius: 4, px: 0.75, py: 0.25 }}>
+                            <Avatar sx={{ width: 16, height: 16, fontSize: '0.55rem', bgcolor: '#6366f1' }}>{u.name.charAt(0).toUpperCase()}</Avatar>
+                            <Typography sx={{ fontSize: '0.72rem', color: '#1d4ed8', fontWeight: 500 }}>{u.name}</Typography>
+                          </Box>
+                        ) : null;
+                      })}
+                    </Box>
+                  )}
+                >
+                  {users.map(u => (
+                    <MenuItem key={u.id} value={u.id}>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Avatar sx={{ width: 24, height: 24, fontSize: '0.65rem', bgcolor: '#6366f1' }}>{u.name.charAt(0).toUpperCase()}</Avatar>
+                        <Box>
+                          <Typography variant="body2" fontWeight={500}>{u.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">{u.email}</Typography>
+                        </Box>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                  <Divider />
+                  <MenuItem value="__create__" sx={{ color: '#6366f1', gap: 1 }}>
+                    <PersonAdd sx={{ fontSize: 16 }} />
+                    <Typography variant="body2" fontWeight={500} color="#6366f1">New person…</Typography>
+                  </MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
                 TAGS
               </Typography>
@@ -569,26 +667,38 @@ export default function InitiativesList() {
                   />
                 ))}
               </Box>
-              <TextField
-                size="small"
-                fullWidth
-                placeholder="Type a tag and press Enter or comma…"
-                value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ',') {
-                    e.preventDefault();
-                    addFormTag(tagInput);
-                  }
-                }}
-                onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
-                    </InputAdornment>
-                  )
-                }}
+              <Autocomplete
+                freeSolo
+                disableClearable
+                options={allTags}
+                filterOptions={(opts, { inputValue }) =>
+                  inputValue.length >= 3
+                    ? opts.filter(o => !formData.tags.includes(o) && o.toLowerCase().includes(inputValue.toLowerCase()))
+                    : []
+                }
+                inputValue={tagInput}
+                onInputChange={(_, val, reason) => { if (reason === 'input') setTagInput(val); }}
+                onChange={(_, val) => { if (val) addFormTag(typeof val === 'string' ? val : ''); }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    size="small"
+                    fullWidth
+                    placeholder="Type a tag and press Enter or comma…"
+                    onKeyDown={e => {
+                      if (e.key === ',') { e.preventDefault(); addFormTag(tagInput); }
+                    }}
+                    onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
+                    InputProps={{
+                      ...params.InputProps,
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
+                        </InputAdornment>
+                      )
+                    }}
+                  />
+                )}
               />
             </Grid>
           </Grid>
@@ -607,6 +717,39 @@ export default function InitiativesList() {
         initiativeId={drawerInitiativeId}
         onClose={() => setDrawerOpen(false)}
       />
+
+      {/* Quick create user dialog */}
+      <Dialog open={quickUserOpen} onClose={() => setQuickUserOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>New Assignee</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
+          <TextField
+            label="Name *"
+            size="small"
+            fullWidth
+            autoFocus
+            value={quickUserName}
+            onChange={e => setQuickUserName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleQuickCreateUser(id => setFormData(f => ({ ...f, assigneeIds: [...(f.assigneeIds || []), id] })))}
+          />
+          <FormControl size="small" fullWidth>
+            <InputLabel>Role</InputLabel>
+            <Select label="Role" value={quickUserRole} onChange={e => setQuickUserRole(e.target.value)}>
+              <MenuItem value="ADMIN">Admin</MenuItem>
+              <MenuItem value="MANAGER">Manager</MenuItem>
+              <MenuItem value="VIEWER">Viewer</MenuItem>
+            </Select>
+          </FormControl>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button size="small" onClick={() => setQuickUserOpen(false)}>Cancel</Button>
+          <Button
+            size="small" variant="contained" disabled={!quickUserName.trim() || quickUserSaving}
+            onClick={() => handleQuickCreateUser(id => setFormData(f => ({ ...f, assigneeIds: [...(f.assigneeIds || []), id] })))}
+          >
+            {quickUserSaving ? 'Creating…' : 'Create & Add'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

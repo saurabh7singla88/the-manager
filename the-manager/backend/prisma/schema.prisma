@@ -12,7 +12,7 @@ datasource db {
 
 model User {
   id        String   @id @default(uuid())
-  email     String   @unique
+  email     String?  @unique
   password  String
   name      String
   avatar    String?
@@ -20,6 +20,8 @@ model User {
   
   preferences Json?
   
+  hasPassword Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   lastLogin DateTime?
@@ -58,7 +60,13 @@ model Initiative {
   
   // Tags & Metadata
   tags        String[]
-  
+
+  // Standalone task flag & optional initiative link
+  isStandaloneTask    Boolean  @default(false)
+  linkedInitiativeId  String?
+  linkedInitiative    Initiative? @relation("TaskInitiativeLink", fields: [linkedInitiativeId], references: [id], onDelete: SetNull)
+  linkedTasks         Initiative[] @relation("TaskInitiativeLink")
+
   // Canvas
   canvasId    String?
   canvas      Canvas?  @relation(fields: [canvasId], references: [id])

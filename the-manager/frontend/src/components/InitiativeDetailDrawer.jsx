@@ -1,15 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   Drawer, Box, Typography, IconButton, Tabs, Tab, Chip, Divider,
   TextField, Button, LinearProgress, Select, MenuItem, FormControl,
   Avatar, Tooltip, CircularProgress, InputAdornment, Slider,
-  List, ListItem, ListItemAvatar, ListItemText
+  List, ListItem, ListItemAvatar, ListItemText,
+  Dialog, DialogTitle, DialogContent, DialogActions, InputLabel,
+  Autocomplete
 } from '@mui/material';
 import {
   Close, Add, Delete, Edit, Link as LinkIcon, Comment,
   History, Info, OpenInNew, Send, CheckCircle, Label,
-  CalendarToday, Person, TrendingUp
+  CalendarToday, Person, TrendingUp, PersonAdd
 } from '@mui/icons-material';
 import api from '../api/axios';
 import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives, fetchInitiatives } from '../features/initiatives/initiativesSlice';
@@ -79,6 +81,18 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState('');
   const [tagInput, setTagInput] = useState('');
+  const [users, setUsers] = useState([]);
+
+  const allTags = useMemo(
+    () => [...new Set([...(allItems || []), ...(items || [])].flatMap(i => i.tags || []))].sort(),
+    [allItems, items]
+  );
+
+  // Quick user create
+  const [quickUserOpen, setQuickUserOpen] = useState(false);
+  const [quickUserName, setQuickUserName] = useState('');
+  const [quickUserRole, setQuickUserRole] = useState('VIEWER');
+  const [quickUserSaving, setQuickUserSaving] = useState(false);
 
   const fetchAll = useCallback(async (id) => {
     setLoading(true);
@@ -104,8 +118,26 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
     if (open && initiativeId) {
       setTab(0);
       fetchAll(initiativeId);
+      api.get('/users').then(r => setUsers(r.data)).catch(() => {});
     }
   }, [open, initiativeId, fetchAll]);
+
+  const handleQuickCreateUser = async (onCreated) => {
+    if (!quickUserName.trim()) return;
+    setQuickUserSaving(true);
+    try {
+      const r = await api.post('/users', { name: quickUserName.trim(), role: quickUserRole });
+      setUsers(prev => [...prev, r.data].sort((a, b) => a.name.localeCompare(b.name)));
+      onCreated(r.data);
+      setQuickUserOpen(false);
+      setQuickUserName('');
+      setQuickUserRole('VIEWER');
+    } catch (err) {
+      console.error('Failed to create user', err);
+    } finally {
+      setQuickUserSaving(false);
+    }
+  };
 
   const detail = fullData || initiative;
 
@@ -190,6 +222,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   };
 
   return (
+    <>
     <Drawer
       anchor="right"
       open={open}
@@ -398,15 +431,32 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                       sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', border: 0, fontWeight: 500, fontSize: '0.7rem' }}
                     />
                   ))}
-                  <TextField
-                    size="small"
-                    placeholder="Add tag…"
-                    value={tagInput}
-                    onChange={e => setTagInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(tagInput); } }}
-                    onBlur={() => { if (tagInput.trim()) addTag(tagInput); }}
-                    sx={{ width: 100, '& .MuiInputBase-input': { py: 0.25, px: 0.75, fontSize: '0.72rem' } }}
-                    InputProps={{ sx: { height: 24 } }}
+                  <Autocomplete
+                    freeSolo
+                    disableClearable
+                    options={allTags}
+                    filterOptions={(opts, { inputValue }) =>
+                      inputValue.length >= 3
+                        ? opts.filter(o => !(detail.tags || []).includes(o) && o.toLowerCase().includes(inputValue.toLowerCase()))
+                        : []
+                    }
+                    inputValue={tagInput}
+                    onInputChange={(_, val, reason) => { if (reason === 'input') setTagInput(val); }}
+                    onChange={(_, val) => { if (val) addTag(typeof val === 'string' ? val : ''); }}
+                    sx={{ width: 130 }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        size="small"
+                        placeholder="Add tag…"
+                        onKeyDown={e => {
+                          if (e.key === ',') { e.preventDefault(); addTag(tagInput); }
+                        }}
+                        onBlur={() => { if (tagInput.trim()) addTag(tagInput); }}
+                        sx={{ '& .MuiInputBase-input': { py: 0.25, px: 0.75, fontSize: '0.72rem' } }}
+                        InputProps={{ ...params.InputProps, sx: { height: 24 } }}
+                      />
+                    )}
                   />
                 </Box>
 
@@ -439,26 +489,72 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                 )}
 
                 {/* Assignees */}
-                {(detail.assignees?.length > 0) && (
-                  <>
-                    <Divider sx={{ my: 2 }} />
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
-                      ASSIGNEES
-                    </Typography>
-                    <Box display="flex" flexWrap="wrap" gap={1}>
-                      {detail.assignees.map(a => (
-                        <Box key={a.id} display="flex" alignItems="center" gap={0.75}
-                          sx={{ bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 5, px: 1, py: 0.25 }}
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                    ASSIGNEES
+                  </Typography>
+                  <Box display="flex" flexWrap="wrap" gap={0.75} mb={1}>
+                    {(detail.assignees || []).map(a => (
+                      <Box key={a.id} display="flex" alignItems="center" gap={0.6}
+                        sx={{ bgcolor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 5, pl: 0.75, pr: 0.5, py: 0.25 }}
+                      >
+                        <Avatar sx={{ width: 18, height: 18, fontSize: '0.6rem', bgcolor: '#6366f1' }}>
+                          {a.name.charAt(0).toUpperCase()}
+                        </Avatar>
+                        <Typography variant="caption" fontWeight={500} sx={{ color: '#0369a1' }}>{a.name}</Typography>
+                        <IconButton
+                          size="small"
+                          sx={{ p: 0.1, ml: 0.1, color: '#94a3b8', '&:hover': { color: 'error.main' } }}
+                          onClick={() => {
+                            const newIds = (detail.assignees || []).filter(x => x.id !== a.id).map(x => x.id);
+                            saveField('assigneeIds', newIds);
+                            setFullData(prev => prev ? { ...prev, assignees: prev.assignees.filter(x => x.id !== a.id) } : prev);
+                          }}
                         >
-                          <Avatar sx={{ width: 18, height: 18, fontSize: '0.6rem', bgcolor: '#6366f1' }}>
-                            {a.name.charAt(0).toUpperCase()}
-                          </Avatar>
-                          <Typography variant="caption" fontWeight={500}>{a.name}</Typography>
-                        </Box>
-                      ))}
-                    </Box>
-                  </>
-                )}
+                          <Close sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      </Box>
+                    ))}
+                  </Box>
+                  <FormControl size="small" fullWidth>
+                      <Select
+                        displayEmpty
+                        value=""
+                        onChange={e => {
+                          const uid = e.target.value;
+                          if (!uid) return;
+                          if (uid === '__create__') { setQuickUserOpen(true); return; }
+                          const newUser = users.find(u => u.id === uid);
+                          const newAssignees = [...(detail.assignees || []), newUser];
+                          saveField('assigneeIds', newAssignees.map(a => a.id));
+                          setFullData(prev => prev ? { ...prev, assignees: newAssignees } : prev);
+                        }}
+                        sx={{ fontSize: '0.8rem' }}
+                        renderValue={() => <Typography sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>+ Add assignee…</Typography>}
+                      >
+                        {users
+                          .filter(u => !(detail.assignees || []).find(a => a.id === u.id))
+                          .map(u => (
+                            <MenuItem key={u.id} value={u.id} sx={{ fontSize: '0.8rem' }}>
+                              <Box display="flex" alignItems="center" gap={1}>
+                                <Avatar sx={{ width: 22, height: 22, fontSize: '0.62rem', bgcolor: '#6366f1' }}>{u.name.charAt(0).toUpperCase()}</Avatar>
+                                <Box>
+                                  <Typography variant="body2" fontWeight={500}>{u.name}</Typography>
+                                  <Typography variant="caption" color="text.secondary">{u.email}</Typography>
+                                </Box>
+                              </Box>
+                            </MenuItem>
+                          ))}
+                        <Divider />
+                        <MenuItem value="__create__" sx={{ fontSize: '0.8rem', color: '#6366f1', gap: 1 }}>
+                          <PersonAdd sx={{ fontSize: 15 }} />
+                          <Typography variant="body2" fontWeight={500} color="#6366f1">New person…</Typography>
+                        </MenuItem>
+                      </Select>
+                    </FormControl>
+
+                </>
 
                 {/* Created by */}
                 {detail.createdBy && (
@@ -722,5 +818,47 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
         </>
       )}
     </Drawer>
+
+    {/* Quick create user dialog */}
+    <Dialog open={quickUserOpen} onClose={() => setQuickUserOpen(false)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>New Assignee</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
+        <TextField
+          label="Name *"
+          size="small"
+          fullWidth
+          autoFocus
+          value={quickUserName}
+          onChange={e => setQuickUserName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleQuickCreateUser(newUser => {
+            const newAssignees = [...(fullData?.assignees || []), newUser];
+            saveField('assigneeIds', newAssignees.map(a => a.id));
+            setFullData(prev => prev ? { ...prev, assignees: newAssignees } : prev);
+          })}
+        />
+        <FormControl size="small" fullWidth>
+          <InputLabel>Role</InputLabel>
+          <Select label="Role" value={quickUserRole} onChange={e => setQuickUserRole(e.target.value)}>
+            <MenuItem value="ADMIN">Admin</MenuItem>
+            <MenuItem value="MANAGER">Manager</MenuItem>
+            <MenuItem value="VIEWER">Viewer</MenuItem>
+          </Select>
+        </FormControl>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" onClick={() => setQuickUserOpen(false)}>Cancel</Button>
+        <Button
+          size="small" variant="contained" disabled={!quickUserName.trim() || quickUserSaving}
+          onClick={() => handleQuickCreateUser(newUser => {
+            const newAssignees = [...(fullData?.assignees || []), newUser];
+            saveField('assigneeIds', newAssignees.map(a => a.id));
+            setFullData(prev => prev ? { ...prev, assignees: newAssignees } : prev);
+          })}
+        >
+          {quickUserSaving ? 'Creating…' : 'Create & Add'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+    </>
   );
 }

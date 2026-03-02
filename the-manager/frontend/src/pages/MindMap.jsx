@@ -7,9 +7,11 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   ReactFlowProvider,
-  Panel
+  Panel,
+  useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { toPng } from 'html-to-image';
 import {
   Box,
   Typography,
@@ -29,8 +31,15 @@ import {
   FormControl,
   InputLabel,
   InputAdornment,
+  Avatar,
+  Autocomplete,
+  Snackbar,
+  Alert,
+  Menu as MuiMenu,
+  MenuItem as MuiMenuItem,
 } from '@mui/material';
-import { Add, List as ListIcon, Refresh, Label } from '@mui/icons-material';
+import { Add, List as ListIcon, Refresh, Label, PersonAdd, Download, SelectAll, CropFree } from '@mui/icons-material';
+import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchAllInitiatives,
@@ -43,10 +52,10 @@ import CanvasSelector from '../components/CanvasSelector';
 
 const NODE_TYPES = { initiative: MindMapNode };
 
-const NODE_WIDTH = 230;
-const NODE_HEIGHT = 115;
-const H_GAP = 60;
-const V_GAP = 80;
+const NODE_WIDTH = 260;
+const NODE_HEIGHT = 130;
+const H_GAP = 90;
+const V_GAP = 100;
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9', dot: '#94a3b8' },
@@ -148,14 +157,157 @@ function MindMapInner() {
     status: 'OPEN',
     priority: 'MEDIUM',
     tags: [],
+    assigneeIds: [],
   });
   const [tagInput, setTagInput] = useState('');
+  const [users, setUsers] = useState([]);
+
+  const allTags = useMemo(
+    () => [...new Set((allItems || []).flatMap(i => i.tags || []))].sort(),
+    [allItems]
+  );
+
+  // Quick user create
+  const [quickUserOpen, setQuickUserOpen] = useState(false);
+  const [quickUserName, setQuickUserName] = useState('');
+  const [quickUserRole, setQuickUserRole] = useState('VIEWER');
+  const [quickUserSaving, setQuickUserSaving] = useState(false);
+
+  const { getNodes, fitView } = useReactFlow();
+  const [exportMsg, setExportMsg] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState([]);
+
+  const doCapture = async (filterFn = null, nodeIdsForFit = null) => {
+    if (nodeIdsForFit) {
+      fitView({ nodes: nodeIdsForFit.map(id => ({ id })), padding: 0.2, duration: 300 });
+    } else {
+      fitView({ padding: 0.15, duration: 300 });
+    }
+    await new Promise(r => setTimeout(r, 420));
+    const rfEl = document.querySelector('.react-flow');
+    if (!rfEl) return;
+    await toPng(rfEl, {
+      backgroundColor: '#f5f6fa',
+      pixelRatio: 2,
+      filter: node => {
+        const cls = node?.classList;
+        if (!cls) return true;
+        if (cls.contains('react-flow__minimap')) return false;
+        if (cls.contains('react-flow__controls')) return false;
+        if (cls.contains('react-flow__panel')) return false;
+        if (filterFn && !filterFn(node)) return false;
+        return true;
+      },
+    }).then(dataUrl => {
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = nodeIdsForFit ? 'mindmap-selection.png' : 'mindmap.png';
+      link.click();
+      setExportMsg(nodeIdsForFit ? 'Selection exported!' : 'Image downloaded!');
+    }).catch(() => setExportMsg('Export failed. Try again.'));
+  };
+
+  const handleExportImage = async () => {
+    if (!getNodes().length) return;
+    setExportMenuAnchor(null);
+    setExporting(true);
+    await doCapture();
+    setExporting(false);
+  };
+
+  const handleExportSelected = async () => {
+    const sel = getNodes().filter(n => n.selected);
+    if (sel.length === 0) return;
+    setExportMenuAnchor(null);
+    setExporting(true);
+    const selIds = sel.map(n => n.id);
+    const selIdSet = new Set(selIds);
+
+    // Remove selection highlight from selected nodes + hide unselected nodes
+    setNodes(prev => prev.map(n => {
+      if (selIdSet.has(n.id)) return { ...n, selected: false };
+      return { ...n, style: { ...n.style, opacity: 0 } };
+    }));
+
+    // Hide any edge whose source or target is not in the selection
+    setEdges(prev => prev.map(e =>
+      selIdSet.has(e.source) && selIdSet.has(e.target)
+        ? e
+        : { ...e, style: { ...e.style, opacity: 0 } }
+    ));
+
+    // Wait for re-render then animate fit
+    await new Promise(r => setTimeout(r, 80));
+    fitView({ nodes: selIds.map(id => ({ id })), padding: 0.2, duration: 300 });
+    await new Promise(r => setTimeout(r, 420));
+
+    const rfEl = document.querySelector('.react-flow');
+    if (rfEl) {
+      await toPng(rfEl, {
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+        filter: node => {
+          const cls = node?.classList;
+          if (!cls) return true;
+          if (cls.contains('react-flow__minimap')) return false;
+          if (cls.contains('react-flow__controls')) return false;
+          if (cls.contains('react-flow__panel')) return false;
+          return true;
+        },
+      }).then(dataUrl => {
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = 'mindmap-selection.png';
+        link.click();
+        setExportMsg('Selection exported!');
+      }).catch(() => setExportMsg('Export failed. Try again.'));
+    }
+
+    // Restore nodes: re-apply selection, remove opacity override
+    setNodes(prev => prev.map(n => {
+      if (selIdSet.has(n.id)) return { ...n, selected: true };
+      const { opacity, ...rest } = n.style || {}; // eslint-disable-line no-unused-vars
+      return { ...n, style: rest };
+    }));
+
+    // Restore edges
+    setEdges(prev => prev.map(e => {
+      if (selIdSet.has(e.source) && selIdSet.has(e.target)) return e;
+      const { opacity, ...rest } = e.style || {}; // eslint-disable-line no-unused-vars
+      return { ...e, style: rest };
+    }));
+
+    setExporting(false);
+  };
 
   const savePositionTimer = useRef({});
 
   useEffect(() => {
     dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }));
   }, [dispatch, activeCanvasId]);
+
+  useEffect(() => {
+    api.get('/users').then(r => setUsers(r.data)).catch(() => {});
+  }, []);
+
+  const handleQuickCreateUser = async (onCreated) => {
+    if (!quickUserName.trim()) return;
+    setQuickUserSaving(true);
+    try {
+      const r = await api.post('/users', { name: quickUserName.trim(), role: quickUserRole });
+      setUsers(prev => [...prev, r.data].sort((a, b) => a.name.localeCompare(b.name)));
+      onCreated(r.data.id);
+      setQuickUserOpen(false);
+      setQuickUserName('');
+      setQuickUserRole('VIEWER');
+    } catch (err) {
+      console.error('Failed to create user', err);
+    } finally {
+      setQuickUserSaving(false);
+    }
+  };
 
   // Client-side canvas filter (belt-and-suspenders in case API returns stale/unfiltered data)
   const displayItems = useMemo(() => {
@@ -220,7 +372,7 @@ function MindMapInner() {
 
     const handleAddChild = (parentId, parentPriority) => {
       setCreateParentId(parentId);
-      setFormData({ title: '', description: '', type: 'TASK', status: 'OPEN', priority: parentPriority || 'MEDIUM', tags: [] });
+      setFormData({ title: '', description: '', type: 'TASK', status: 'OPEN', priority: parentPriority || 'MEDIUM', tags: [], assigneeIds: [] });
       setTagInput('');
       setCreateDialogOpen(true);
     };
@@ -229,9 +381,24 @@ function MindMapInner() {
       .filter(i => !hiddenIds.has(i.id))
       .map(initiative => {
         const savedPos = initiative.positionX != null && initiative.positionY != null;
-        const pos = savedPos
-          ? { x: initiative.positionX, y: initiative.positionY }
-          : (autoPositions[initiative.id] || { x: 0, y: 0 });
+        let pos;
+        if (savedPos) {
+          pos = { x: initiative.positionX, y: initiative.positionY };
+        } else if (initiative.parentId) {
+          // Place near parent if parent has a saved position
+          const parent = displayItems.find(p => p.id === initiative.parentId);
+          if (parent && parent.positionX != null && parent.positionY != null) {
+            const placedSiblings = displayItems.filter(
+              s => s.parentId === initiative.parentId && s.positionX != null && s.id !== initiative.id
+            );
+            const offsetX = placedSiblings.length * (NODE_WIDTH + H_GAP);
+            pos = { x: parent.positionX + offsetX, y: parent.positionY + NODE_HEIGHT + V_GAP };
+          } else {
+            pos = autoPositions[initiative.id] || { x: 0, y: 0 };
+          }
+        } else {
+          pos = autoPositions[initiative.id] || { x: 0, y: 0 };
+        }
 
         return {
           id: initiative.id,
@@ -254,8 +421,9 @@ function MindMapInner() {
         source: initiative.parentId,
         target: initiative.id,
         type: 'smoothstep',
-        style: { stroke: '#c7d2fe', strokeWidth: 2 },
-        animated: initiative.status === 'IN_PROGRESS'
+        style: { stroke: '#c7d2fe', strokeWidth: 1.5, opacity: 0.85 },
+        animated: initiative.status === 'IN_PROGRESS',
+        markerEnd: { type: 'arrowclosed', width: 10, height: 10, color: '#c7d2fe' }
       }));
 
     setNodes(rfNodes);
@@ -285,7 +453,7 @@ function MindMapInner() {
   const handleCreateSubmit = async () => {
     await dispatch(createInitiative({ ...formData, parentId: createParentId, ...(activeCanvasId ? { canvasId: activeCanvasId } : {}) }));
     setCreateDialogOpen(false);
-    setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [] });
+    setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
     setTagInput('');
     dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }));
   };
@@ -321,6 +489,48 @@ function MindMapInner() {
           </Typography>
         </Box>
         <Box display="flex" gap={1} alignItems="center">
+          <Tooltip title="Export as image">
+            <span>
+              <IconButton
+                onClick={e => setExportMenuAnchor(e.currentTarget)}
+                disabled={exporting}
+                size="small"
+                sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+              >
+                {exporting ? <CircularProgress size={16} /> : <Download fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          <MuiMenu
+            anchorEl={exportMenuAnchor}
+            open={Boolean(exportMenuAnchor)}
+            onClose={() => setExportMenuAnchor(null)}
+            PaperProps={{ sx: { borderRadius: 2, minWidth: 200, boxShadow: '0 4px 20px rgba(0,0,0,0.12)' } }}
+          >
+            <MuiMenuItem dense onClick={handleExportImage} sx={{ gap: 1.5 }}>
+              <SelectAll sx={{ fontSize: 18, color: 'text.secondary' }} />
+              <Box>
+                <Typography variant="body2" fontWeight={500}>Export all</Typography>
+                <Typography variant="caption" color="text.secondary">Save entire mind map</Typography>
+              </Box>
+            </MuiMenuItem>
+            <MuiMenuItem
+              dense
+              onClick={handleExportSelected}
+              disabled={selectedNodeIds.length === 0}
+              sx={{ gap: 1.5 }}
+            >
+              <CropFree sx={{ fontSize: 18, color: 'text.secondary' }} />
+              <Box>
+                <Typography variant="body2" fontWeight={500}>
+                  Export selected{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ''}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {selectedNodeIds.length === 0 ? 'Select nodes first' : 'Save selected nodes only'}
+                </Typography>
+              </Box>
+            </MuiMenuItem>
+          </MuiMenu>
           <Tooltip title="Refresh">
             <IconButton
               onClick={() => dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }))}
@@ -342,7 +552,7 @@ function MindMapInner() {
             startIcon={<Add />}
             onClick={() => {
               setCreateParentId(null);
-              setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [] });
+              setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
               setTagInput('');
               setCreateDialogOpen(true);
             }}
@@ -353,7 +563,7 @@ function MindMapInner() {
       </Box>
 
       {/* React Flow canvas */}
-      <Box sx={{ flex: 1, border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden', bgcolor: '#fafbff' }}>
+      <Box sx={{ flex: 1, border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden', bgcolor: '#f5f6fa' }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -362,22 +572,30 @@ function MindMapInner() {
           nodeTypes={NODE_TYPES}
           onNodeDragStop={onNodeDragStop}
           onNodeDoubleClick={onNodeDoubleClick}
+          onSelectionChange={({ nodes: sel }) => setSelectedNodeIds((sel || []).map(n => n.id))}
           selectionOnDrag
           panOnDrag={[1, 2]}
           multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
           selectionKeyCode={null}
           fitView
-          fitViewOptions={{ padding: 0.2 }}
-          minZoom={0.1}
+          fitViewOptions={{ padding: 0.5, maxZoom: 0.8 }}
+          minZoom={0.08}
           maxZoom={2}
           defaultEdgeOptions={{ type: 'smoothstep' }}
         >
-          <Background color="#c7d2fe" gap={24} size={1} />
-          <Controls style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08)', borderRadius: 8, border: '1px solid #e2e8f0' }} />
+          <Background variant="dots" color="#c7d2fe" gap={28} size={1.5} />
+          <Controls
+            style={{
+              boxShadow: '0 2px 12px rgba(0,0,0,0.1)',
+              borderRadius: 10,
+              border: '1px solid #e2e8f0',
+              overflow: 'hidden',
+            }}
+          />
           <MiniMap
             nodeColor={(node) => STATUS_CONFIG[node.data?.initiative?.status]?.dot || '#94a3b8'}
-            maskColor="rgba(99,102,241,0.04)"
-            style={{ borderRadius: 8, border: '1px solid #e2e8f0' }}
+            maskColor="rgba(99,102,241,0.06)"
+            style={{ borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
           />
           {allItems.length === 0 && (
             <Panel position="top-center">
@@ -399,27 +617,22 @@ function MindMapInner() {
 
       {/* Legend */}
       <Box
-        display="flex" gap={0.75} mt={1.5} flexWrap="wrap" alignItems="center"
-        sx={{ px: 1.5, py: 1, bgcolor: 'background.paper', borderRadius: 2, border: '1px solid #e2e8f0' }}
+        display="flex" gap={1} mt={1.5} flexWrap="wrap" alignItems="center"
+        sx={{ px: 2, py: 0.75, bgcolor: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(8px)', borderRadius: 2, border: '1px solid #e2e8f0' }}
       >
-        <Typography variant="caption" color="text.disabled" fontWeight={500} mr={0.5}>Status:</Typography>
         {Object.entries(STATUS_CONFIG).map(([status, cfg]) => (
-          <Box key={status} display="flex" alignItems="center" gap={0.4}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: cfg.dot }} />
-            <Typography variant="caption" color="text.secondary">{cfg.label}</Typography>
+          <Box key={status} display="flex" alignItems="center" gap={0.5}>
+            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: cfg.dot }} />
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{cfg.label}</Typography>
           </Box>
         ))}
-        <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-        <Typography variant="caption" color="text.disabled" fontWeight={500} mr={0.5}>Priority (left border):</Typography>
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         {Object.entries(PRIORITY_COLORS).map(([p, color]) => (
           <Box key={p} display="flex" alignItems="center" gap={0.4}>
-            <Box sx={{ width: 3, height: 14, bgcolor: color, borderRadius: 1 }} />
-            <Typography variant="caption" color="text.secondary">{p.charAt(0) + p.slice(1).toLowerCase()}</Typography>
+            <Box sx={{ width: 3, height: 12, bgcolor: color, borderRadius: 1 }} />
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{p.charAt(0) + p.slice(1).toLowerCase()}</Typography>
           </Box>
         ))}
-        <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
-          · Animated edges = In Progress
-        </Typography>
       </Box>
 
       {/* Detail Drawer (full tabs: Overview, Links, Comments, Activity) */}
@@ -486,6 +699,55 @@ function MindMapInner() {
                 </Select>
               </FormControl>
             </Box>
+            {users.length > 0 && (
+              <FormControl fullWidth size="small">
+                <InputLabel>Assignees</InputLabel>
+                <Select
+                  multiple
+                  value={formData.assigneeIds || []}
+                  label="Assignees"
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (Array.isArray(v) && v.includes('__create__')) {
+                      setQuickUserOpen(true);
+                      return;
+                    }
+                    setFormData(f => ({ ...f, assigneeIds: v }));
+                  }}
+                  renderValue={(selected) => (
+                    <Box display="flex" flexWrap="wrap" gap={0.5}>
+                      {selected.map(id => {
+                        const u = users.find(u => u.id === id);
+                        return u ? (
+                          <Box key={id} display="flex" alignItems="center" gap={0.4}
+                            sx={{ bgcolor: '#eff6ff', borderRadius: 4, px: 0.75, py: 0.25 }}>
+                            <Avatar sx={{ width: 16, height: 16, fontSize: '0.55rem', bgcolor: '#6366f1' }}>{u.name.charAt(0).toUpperCase()}</Avatar>
+                            <Typography sx={{ fontSize: '0.72rem', color: '#1d4ed8', fontWeight: 500 }}>{u.name}</Typography>
+                          </Box>
+                        ) : null;
+                      })}
+                    </Box>
+                  )}
+                >
+                  {users.map(u => (
+                    <MenuItem key={u.id} value={u.id}>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Avatar sx={{ width: 24, height: 24, fontSize: '0.65rem', bgcolor: '#6366f1' }}>{u.name.charAt(0).toUpperCase()}</Avatar>
+                        <Box>
+                          <Typography variant="body2" fontWeight={500}>{u.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">{u.email}</Typography>
+                        </Box>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                  <Divider />
+                  <MenuItem value="__create__" sx={{ color: '#6366f1', gap: 1 }}>
+                    <PersonAdd sx={{ fontSize: 16 }} />
+                    <Typography variant="body2" fontWeight={500} color="#6366f1">New person…</Typography>
+                  </MenuItem>
+                </Select>
+              </FormControl>
+            )}
             <Box>
               <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
                 TAGS
@@ -501,26 +763,38 @@ function MindMapInner() {
                   />
                 ))}
               </Box>
-              <TextField
-                size="small"
-                fullWidth
-                placeholder="Type a tag and press Enter or comma…"
-                value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ',') {
-                    e.preventDefault();
-                    addFormTag(tagInput);
-                  }
-                }}
-                onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
-                    </InputAdornment>
-                  )
-                }}
+              <Autocomplete
+                freeSolo
+                disableClearable
+                options={allTags}
+                filterOptions={(opts, { inputValue }) =>
+                  inputValue.length >= 3
+                    ? opts.filter(o => !formData.tags.includes(o) && o.toLowerCase().includes(inputValue.toLowerCase()))
+                    : []
+                }
+                inputValue={tagInput}
+                onInputChange={(_, val, reason) => { if (reason === 'input') setTagInput(val); }}
+                onChange={(_, val) => { if (val) addFormTag(typeof val === 'string' ? val : ''); }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    size="small"
+                    fullWidth
+                    placeholder="Type a tag and press Enter or comma…"
+                    onKeyDown={e => {
+                      if (e.key === ',') { e.preventDefault(); addFormTag(tagInput); }
+                    }}
+                    onBlur={() => { if (tagInput.trim()) addFormTag(tagInput); }}
+                    InputProps={{
+                      ...params.InputProps,
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <Label sx={{ fontSize: 16, color: 'text.disabled' }} />
+                        </InputAdornment>
+                      )
+                    }}
+                  />
+                )}
               />
             </Box>
           </Box>
@@ -529,6 +803,48 @@ function MindMapInner() {
           <Button onClick={() => setCreateDialogOpen(false)} variant="outlined">Cancel</Button>
           <Button onClick={handleCreateSubmit} variant="contained" disabled={!formData.title.trim()}>
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+      {/* Export feedback */}
+      <Snackbar
+        open={!!exportMsg}
+        autoHideDuration={3000}
+        onClose={() => setExportMsg('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="success" onClose={() => setExportMsg('')} sx={{ width: '100%' }}>{exportMsg}</Alert>
+      </Snackbar>
+
+      {/* Quick create user dialog */}
+      <Dialog open={quickUserOpen} onClose={() => setQuickUserOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>New Assignee</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
+          <TextField
+            label="Name *"
+            size="small"
+            fullWidth
+            autoFocus
+            value={quickUserName}
+            onChange={e => setQuickUserName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleQuickCreateUser(id => setFormData(f => ({ ...f, assigneeIds: [...(f.assigneeIds || []), id] })))}
+          />
+          <FormControl size="small" fullWidth>
+            <InputLabel>Role</InputLabel>
+            <Select label="Role" value={quickUserRole} onChange={e => setQuickUserRole(e.target.value)}>
+              <MenuItem value="ADMIN">Admin</MenuItem>
+              <MenuItem value="MANAGER">Manager</MenuItem>
+              <MenuItem value="VIEWER">Viewer</MenuItem>
+            </Select>
+          </FormControl>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button size="small" onClick={() => setQuickUserOpen(false)}>Cancel</Button>
+          <Button
+            size="small" variant="contained" disabled={!quickUserName.trim() || quickUserSaving}
+            onClick={() => handleQuickCreateUser(id => setFormData(f => ({ ...f, assigneeIds: [...(f.assigneeIds || []), id] })))}
+          >
+            {quickUserSaving ? 'Creating…' : 'Create & Add'}
           </Button>
         </DialogActions>
       </Dialog>
