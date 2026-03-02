@@ -18,12 +18,41 @@ router.get('/', async (req, res, next) => {
 
     if (status) where.status = status;
     if (priority) where.priority = priority;
+
+    // Canvas filter: when canvasId is given and no parentId filter (flat fetch for mind map),
+    // include the canvas items AND all their descendants (children lack canvasId on their own).
     if (canvasId === 'null') {
       where.canvasId = null;
+    } else if (canvasId && !parentId) {
+      // Fetch canvas root items first, then collect all descendant IDs
+      const rootItems = await prisma.initiative.findMany({
+        where: { canvasId },
+        select: { id: true },
+      });
+      if (rootItems.length === 0) {
+        return res.json([]);
+      }
+      // BFS to collect all descendant IDs
+      const allIds = new Set(rootItems.map(r => r.id));
+      const queue = [...allIds];
+      while (queue.length) {
+        const batch = queue.splice(0, queue.length);
+        const children = await prisma.initiative.findMany({
+          where: { parentId: { in: batch } },
+          select: { id: true },
+        });
+        children.forEach(c => {
+          if (!allIds.has(c.id)) {
+            allIds.add(c.id);
+            queue.push(c.id);
+          }
+        });
+      }
+      where.id = { in: [...allIds] };
     } else if (canvasId) {
       where.canvasId = canvasId;
     }
-    
+
     // If parentId is provided, filter by it; if 'null', get root items
     if (parentId === 'null') {
       where.parentId = null;

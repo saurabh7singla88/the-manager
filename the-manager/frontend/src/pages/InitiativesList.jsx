@@ -39,7 +39,7 @@ export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { items, loading } = useSelector((state) => state.initiatives);
-  const { activeCanvasId } = useSelector((state) => state.canvas);
+  const { activeCanvasId, canvases } = useSelector((state) => state.canvas);
   const [openDialog, setOpenDialog] = useState(false);
   const [expanded, setExpanded] = useState({});
   const [formData, setFormData] = useState({
@@ -99,6 +99,7 @@ export default function InitiativesList() {
         priority: initiative.priority,
         parentId: initiative.parentId,
         tags: initiative.tags || [],
+        canvasId: initiative.canvasId || null,
       });
       setEditingId(initiative.id);
     } else {
@@ -110,6 +111,7 @@ export default function InitiativesList() {
         priority: 'MEDIUM',
         parentId,
         tags: [],
+        canvasId: activeCanvasId || null,
       });
       setEditingId(null);
     }
@@ -127,6 +129,7 @@ export default function InitiativesList() {
       priority: 'MEDIUM',
       parentId: null,
       tags: [],
+      canvasId: null,
     });
     setTagInput('');
     setEditingId(null);
@@ -158,9 +161,9 @@ export default function InitiativesList() {
   const handleSubmit = async () => {
     const parentId = formData.parentId;
     if (editingId) {
-      await dispatch(updateInitiative({ id: editingId, data: formData }));
+      await dispatch(updateInitiative({ id: editingId, data: { ...formData, canvasId: formData.canvasId || null } }));
     } else {
-      await dispatch(createInitiative({ ...formData, ...(activeCanvasId ? { canvasId: activeCanvasId } : {}) }));
+      await dispatch(createInitiative({ ...formData, canvasId: formData.canvasId || null }));
     }
     handleCloseDialog();
     doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
@@ -529,6 +532,28 @@ export default function InitiativesList() {
                 </Select>
               </FormControl>
             </Grid>
+            {canvases.length > 0 && (
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <InputLabel>Canvas</InputLabel>
+                  <Select
+                    value={formData.canvasId || ''}
+                    label="Canvas"
+                    onChange={(e) => setFormData({ ...formData, canvasId: e.target.value || null })}
+                  >
+                    <MenuItem value="">— No canvas —</MenuItem>
+                    {canvases.map(c => (
+                      <MenuItem key={c.id} value={c.id}>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: c.color, flexShrink: 0 }} />
+                          {c.name}
+                        </Box>
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            )}
             <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
                 TAGS

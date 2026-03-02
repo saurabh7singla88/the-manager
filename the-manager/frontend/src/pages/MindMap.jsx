@@ -157,10 +157,28 @@ function MindMapInner() {
     dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }));
   }, [dispatch, activeCanvasId]);
 
+  // Client-side canvas filter (belt-and-suspenders in case API returns stale/unfiltered data)
+  const displayItems = useMemo(() => {
+    if (!activeCanvasId) return allItems;
+    // Include items directly on this canvas plus any descendants (tasks/subtasks under them)
+    const inCanvas = new Set(allItems.filter(i => i.canvasId === activeCanvasId).map(i => i.id));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      allItems.forEach(i => {
+        if (!inCanvas.has(i.id) && i.parentId && inCanvas.has(i.parentId)) {
+          inCanvas.add(i.id);
+          changed = true;
+        }
+      });
+    }
+    return allItems.filter(i => inCanvas.has(i.id));
+  }, [allItems, activeCanvasId]);
+
   // Build children map (memoised)
   const childrenOf = useMemo(() => {
     const map = {};
-    allItems.forEach(i => {
+    displayItems.forEach(i => {
       if (!map[i.id]) map[i.id] = [];
       if (i.parentId) {
         if (!map[i.parentId]) map[i.parentId] = [];
@@ -168,7 +186,7 @@ function MindMapInner() {
       }
     });
     return map;
-  }, [allItems]);
+  }, [displayItems]);
 
   // Compute hidden nodes (collapsed subtrees)
   const hiddenIds = useMemo(() => {
@@ -183,9 +201,13 @@ function MindMapInner() {
 
   // Build React Flow nodes + edges
   useEffect(() => {
-    if (!allItems.length) return;
+    if (!displayItems.length) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
 
-    const autoPositions = computeLayout(allItems);
+    const autoPositions = computeLayout(displayItems);
 
     const handleToggleCollapse = (id) => {
       setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
@@ -203,7 +225,7 @@ function MindMapInner() {
       setCreateDialogOpen(true);
     };
 
-    const rfNodes = allItems
+    const rfNodes = displayItems
       .filter(i => !hiddenIds.has(i.id))
       .map(initiative => {
         const savedPos = initiative.positionX != null && initiative.positionY != null;
@@ -225,7 +247,7 @@ function MindMapInner() {
         };
       });
 
-    const rfEdges = allItems
+    const rfEdges = displayItems
       .filter(i => i.parentId && !hiddenIds.has(i.id) && !hiddenIds.has(i.parentId))
       .map(initiative => ({
         id: `e-${initiative.parentId}-${initiative.id}`,
@@ -238,7 +260,7 @@ function MindMapInner() {
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [allItems, collapsed, hiddenIds]);
+  }, [displayItems, collapsed, hiddenIds]);
 
   const onNodeDragStop = useCallback((_, node, draggedNodes) => {
     // Save positions for all nodes that moved (supports group drag)
@@ -265,7 +287,7 @@ function MindMapInner() {
     setCreateDialogOpen(false);
     setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [] });
     setTagInput('');
-    dispatch(fetchAllInitiatives());
+    dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }));
   };
 
   const addFormTag = (tag) => {
@@ -295,7 +317,7 @@ function MindMapInner() {
         <Box>
           <Typography variant="h4" fontWeight={700}>Mind Map</Typography>
           <Typography variant="body2" color="text.secondary" mt={0.5}>
-            {allItems.length} initiative{allItems.length !== 1 ? 's' : ''} · drag to rearrange
+            {displayItems.length} initiative{displayItems.length !== 1 ? 's' : ''} · drag to rearrange
           </Typography>
         </Box>
         <Box display="flex" gap={1} alignItems="center">

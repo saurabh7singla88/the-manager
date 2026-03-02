@@ -48,6 +48,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const dispatch = useDispatch();
   const { allItems, items } = useSelector(s => s.initiatives);
   const { user } = useSelector(s => s.auth);
+  const { canvases } = useSelector(s => s.canvas);
 
   const allKnownItems = [...allItems, ...items];
   const initiative = allKnownItems.find(i => i.id === initiativeId) || null;
@@ -408,6 +409,34 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                     InputProps={{ sx: { height: 24 } }}
                   />
                 </Box>
+
+                {/* Canvas */}
+                {canvases.length > 0 && (
+                  <>
+                    <Divider sx={{ my: 2 }} />
+                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                      CANVAS
+                    </Typography>
+                    <FormControl size="small" fullWidth>
+                      <Select
+                        value={detail.canvasId || ''}
+                        displayEmpty
+                        onChange={e => saveField('canvasId', e.target.value || null)}
+                        sx={{ fontSize: '0.8rem' }}
+                      >
+                        <MenuItem value="" sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>— No canvas —</MenuItem>
+                        {canvases.map(c => (
+                          <MenuItem key={c.id} value={c.id} sx={{ fontSize: '0.8rem' }}>
+                            <Box display="flex" alignItems="center" gap={1}>
+                              <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: c.color, flexShrink: 0 }} />
+                              {c.name}
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </>
+                )}
 
                 {/* Assignees */}
                 {(detail.assignees?.length > 0) && (
