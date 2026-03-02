@@ -38,7 +38,7 @@ import {
   Menu as MuiMenu,
   MenuItem as MuiMenuItem,
 } from '@mui/material';
-import { Add, List as ListIcon, Refresh, Label, PersonAdd, Download, SelectAll, CropFree } from '@mui/icons-material';
+import { Add, List as ListIcon, Refresh, Label, PersonAdd, Download, SelectAll, CropFree, AutoFixHigh } from '@mui/icons-material';
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -351,6 +351,74 @@ function MindMapInner() {
     return hidden;
   }, [collapsed, childrenOf]);
 
+  const autoArrange = useCallback(() => {
+    if (!displayItems.length) return;
+
+    // Snapshot current live positions from React Flow (respects unsaved drags too)
+    const livePos = {};
+    nodes.forEach(n => { livePos[n.id] = { x: n.position.x, y: n.position.y }; });
+
+    const newPositions = {};
+
+    // Process each parent's children:
+    //   - Snap Y to parent.y + NODE_HEIGHT + V_GAP (clean depth alignment)
+    //   - Blend X: 60% user position + 40% ideal center-under-parent
+    //   - Resolve any remaining sibling overlaps with minimal rightward nudge
+    //   - Roots are NEVER moved
+    const processChildren = (parentId, parentPos) => {
+      const children = childrenOf[parentId] || [];
+      if (!children.length) return;
+
+      const targetY = parentPos.y + NODE_HEIGHT + V_GAP;
+      const parentCenterX = parentPos.x + NODE_WIDTH / 2;
+      const totalW = children.length * NODE_WIDTH + (children.length - 1) * H_GAP;
+      const idealStartX = parentCenterX - totalW / 2;
+
+      // Sort siblings by current X to preserve the user's left-right order
+      const sorted = [...children].sort((a, b) =>
+        (livePos[a]?.x ?? 0) - (livePos[b]?.x ?? 0)
+      );
+
+      // Gently blend each child's X toward its ideal slot
+      let blended = sorted.map((id, i) => {
+        const userX = livePos[id]?.x ?? (idealStartX + i * (NODE_WIDTH + H_GAP));
+        const idealX = idealStartX + i * (NODE_WIDTH + H_GAP);
+        return { id, x: Math.round(userX * 0.6 + idealX * 0.4) };
+      });
+
+      // Re-sort blended positions and de-overlap (nudge right only if too close)
+      blended.sort((a, b) => a.x - b.x);
+      for (let i = 1; i < blended.length; i++) {
+        const minX = blended[i - 1].x + NODE_WIDTH + H_GAP;
+        if (blended[i].x < minX) blended[i].x = minX;
+      }
+
+      blended.forEach(({ id, x }) => {
+        const newPos = { x, y: Math.round(targetY) };
+        newPositions[id] = newPos;
+        livePos[id] = newPos; // use updated pos for grandchildren
+        processChildren(id, newPos);
+      });
+    };
+
+    displayItems.filter(i => !i.parentId).forEach(root => {
+      processChildren(root.id, livePos[root.id] || { x: 0, y: 0 });
+    });
+
+    if (!Object.keys(newPositions).length) return;
+
+    setNodes(prev => prev.map(n => ({
+      ...n,
+      position: newPositions[n.id] || n.position,
+    })));
+
+    Object.entries(newPositions).forEach(([id, pos]) => {
+      dispatch(updatePosition({ id, positionX: pos.x, positionY: pos.y }));
+    });
+
+    setTimeout(() => fitView({ padding: 0.18, duration: 450 }), 120);
+  }, [nodes, displayItems, childrenOf, dispatch, fitView]);
+
   // Build React Flow nodes + edges
   useEffect(() => {
     if (!displayItems.length) {
@@ -531,6 +599,15 @@ function MindMapInner() {
               </Box>
             </MuiMenuItem>
           </MuiMenu>
+          <Tooltip title="Auto-arrange: clean up layout, keeping trees near their current positions">
+            <IconButton
+              onClick={autoArrange}
+              size="small"
+              sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+            >
+              <AutoFixHigh fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refresh">
             <IconButton
               onClick={() => dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }))}
