@@ -11,11 +11,13 @@ import {
 import {
   Close, Add, Delete, Edit, Link as LinkIcon, Comment,
   History, Info, OpenInNew, Send, CheckCircle, Label,
-  CalendarToday, Person, TrendingUp, PersonAdd
+  CalendarToday, Person, TrendingUp, PersonAdd,
+  IosShare
 } from '@mui/icons-material';
 import api from '../api/axios';
 import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives, fetchInitiatives } from '../features/initiatives/initiativesSlice';
 import { format, formatDistanceToNow } from 'date-fns';
+import InitiativeSummaryDialog from './InitiativeSummaryDialog';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9' },
@@ -87,6 +89,9 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
     () => [...new Set([...(allItems || []), ...(items || [])].flatMap(i => i.tags || []))].sort(),
     [allItems, items]
   );
+
+  // Summary
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   // Quick user create
   const [quickUserOpen, setQuickUserOpen] = useState(false);
@@ -283,9 +288,16 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                   )}
                 </Box>
               </Box>
-              <IconButton size="small" onClick={onClose} sx={{ mt: -0.25, mr: -0.5 }}>
-                <Close fontSize="small" />
-              </IconButton>
+              <Box display="flex" alignItems="center" gap={0.5}>
+                <Tooltip title="Share summary">
+                  <IconButton size="small" onClick={() => setSummaryOpen(true)} sx={{ color: 'text.secondary' }}>
+                    <IosShare fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <IconButton size="small" onClick={onClose} sx={{ mt: -0.25, mr: -0.5 }}>
+                  <Close fontSize="small" />
+                </IconButton>
+              </Box>
             </Box>
 
             {/* Quick status + priority pills */}
@@ -859,6 +871,14 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
         </Button>
       </DialogActions>
     </Dialog>
+
+    {/* Quick Summary Dialog */}
+    <InitiativeSummaryDialog
+      open={summaryOpen}
+      onClose={() => setSummaryOpen(false)}
+      initiativeId={initiativeId}
+      initiativeData={fullData || null}
+    />
     </>
   );
 }

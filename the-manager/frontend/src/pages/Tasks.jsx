@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, TextField, Checkbox, IconButton, Chip,
   CircularProgress, Divider, Tooltip, InputAdornment,
@@ -16,6 +17,8 @@ import {
 import { fetchTasks, createInitiative, updateInitiative, deleteInitiative } from '../features/initiatives/initiativesSlice';
 import CanvasSelector from '../components/CanvasSelector';
 import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
+import AIPriorityStrip from '../components/AIPriorityStrip';
+import InitiativeSummaryDialog from '../components/InitiativeSummaryDialog';
 import api from '../api/axios';
 import { format } from 'date-fns';
 
@@ -71,6 +74,13 @@ export default function Tasks() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTaskId, setDrawerTaskId] = useState(null);
 
+  // Summary dialog
+  const [summaryId, setSummaryId] = useState(null);
+
+  // Navigate + deep-link
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
   // Row context menu
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuTask, setMenuTask] = useState(null);
@@ -104,6 +114,12 @@ export default function Tasks() {
     }).catch(() => {});
     api.get('/users').then(r => setUsers(r.data)).catch(() => {});
   }, []);
+
+  // Auto-open drawer from ?open=<id>
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (openId) { setDrawerTaskId(openId); setDrawerOpen(true); }
+  }, [searchParams]);
 
   const handleQuickCreateUser = async (onCreated) => {
     if (!quickUserName.trim()) return;
@@ -231,6 +247,15 @@ export default function Tasks() {
         </Box>
         <Button variant="contained" startIcon={<Add />} onClick={openCreate}>New Task</Button>
       </Box>
+
+      {/* AI Task Priority Suggestions */}
+      <AIPriorityStrip
+        mode="tasks"
+        limit={5}
+        title="AI Task Priority Suggestions"
+        onCardClick={id => { setDrawerTaskId(id); setDrawerOpen(true); }}
+        sx={{ mb: 3 }}
+      />
 
       {/* Quick-add bar */}
       <Box
@@ -600,6 +625,13 @@ export default function Tasks() {
         initiativeId={drawerTaskId}
         open={drawerOpen}
         onClose={() => { setDrawerOpen(false); doFetch(search, filterStatus, activeCanvasId); }}
+      />
+
+      {/* Summary dialog */}
+      <InitiativeSummaryDialog
+        open={!!summaryId}
+        initiativeId={summaryId}
+        onClose={() => setSummaryId(null)}
       />
 
       {/* Quick create user dialog */}

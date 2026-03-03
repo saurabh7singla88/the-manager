@@ -5,6 +5,8 @@ import authRoutes from './routes/auth.js';
 import initiativeRoutes from './routes/initiatives.js';
 import userRoutes from './routes/users.js';
 import canvasRoutes from './routes/canvases.js';
+import brainstormRoutes from './routes/brainstorm.js';
+import aiRoutes from './routes/ai.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -25,6 +27,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/initiatives', initiativeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/canvases', canvasRoutes);
+app.use('/api/brainstorm', brainstormRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

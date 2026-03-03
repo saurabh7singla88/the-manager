@@ -9,6 +9,7 @@ export const fetchInitiatives = createAsyncThunk(
       const params = new URLSearchParams();
       if (filters.status) params.append('status', filters.status);
       if (filters.priority) params.append('priority', filters.priority);
+      if (filters.type) params.append('type', filters.type);
       if (filters.parentId !== undefined) params.append('parentId', filters.parentId);
       if (filters.search) params.append('search', filters.search);
       if (filters.canvasId !== undefined) params.append('canvasId', filters.canvasId);

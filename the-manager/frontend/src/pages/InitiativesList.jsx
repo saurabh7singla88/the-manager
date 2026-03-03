@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import CanvasSelector from '../components/CanvasSelector';
 import api from '../api/axios';
 import {
@@ -10,7 +10,8 @@ import {
   Grid, CircularProgress, Divider, Tooltip, InputAdornment,
   Autocomplete
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare } from '@mui/icons-material';
+import { AISuggestionsButton } from '../components/AISuggestionsPanel';
 import { Avatar, AvatarGroup } from '@mui/material';
 import {
   fetchInitiatives, createInitiative, updateInitiative,
@@ -18,6 +19,7 @@ import {
 } from '../features/initiatives/initiativesSlice';
 import { format } from 'date-fns';
 import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
+import InitiativeSummaryDialog from '../components/InitiativeSummaryDialog';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -40,6 +42,7 @@ const TYPE_LABELS = { INITIATIVE: 'Initiative', TASK: 'Task', SUBTASK: 'Subtask'
 export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { items, loading } = useSelector((state) => state.initiatives);
   const { activeCanvasId, canvases } = useSelector((state) => ({
     activeCanvasId: state.canvas.activeCanvasId.initiatives,
@@ -70,6 +73,57 @@ export default function InitiativesList() {
   // Detail drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerInitiativeId, setDrawerInitiativeId] = useState(null);
+
+  // Summary dialog
+  const [summaryId, setSummaryId] = useState(null);
+
+  // Auto-open drawer and expand ancestor chain when ?open=<id> is in the URL
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId || items.length === 0) return; // wait until root items are loaded
+
+    async function openAndExpand() {
+      // 1. Walk up the ancestor chain by fetching each item's parentId
+      const ancestors = []; // ordered root → direct parent
+      let currentId = openId;
+      const visited = new Set();
+      while (currentId) {
+        if (visited.has(currentId)) break;
+        visited.add(currentId);
+        try {
+          const { data: item } = await api.get(`/initiatives/${currentId}`);
+          if (item.parentId) ancestors.unshift(item.parentId); // prepend so order is root-first
+          currentId = item.parentId;
+        } catch {
+          break;
+        }
+      }
+
+      // 2. Expand each ancestor top-down (fetch children + mark expanded)
+      for (const ancestorId of ancestors) {
+        await new Promise(resolve => {
+          setLoadingChildren(prev => ({ ...prev, [ancestorId]: true }));
+          api.get(`/initiatives?parentId=${ancestorId}`)
+            .then(r => {
+              setChildrenMap(prev => ({ ...prev, [ancestorId]: r.data }));
+              setExpanded(prev => ({ ...prev, [ancestorId]: true }));
+            })
+            .catch(() => {})
+            .finally(() => {
+              setLoadingChildren(prev => ({ ...prev, [ancestorId]: false }));
+              resolve();
+            });
+        });
+      }
+
+      // 3. Open the drawer for the target item
+      setDrawerInitiativeId(openId);
+      setDrawerOpen(true);
+    }
+
+    openAndExpand();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, items]);
 
   // Search + filters
   const [searchText, setSearchText] = useState('');
@@ -107,6 +161,7 @@ export default function InitiativesList() {
   const doFetch = useCallback((search, status, priority, canvasId) => {
     dispatch(fetchInitiatives({
       parentId: 'null',
+      type: 'INITIATIVE',
       ...(search && { search }),
       ...(status && { status }),
       ...(priority && { priority }),
@@ -369,6 +424,11 @@ export default function InitiativesList() {
                 <Visibility sx={{ fontSize: 17 }} />
               </IconButton>
             </Tooltip>
+            <Tooltip title="Share summary">
+              <IconButton size="small" onClick={() => setSummaryId(initiative.id)} sx={{ color: 'text.secondary' }}>
+                <IosShare sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Add sub-item">
               <IconButton size="small" onClick={() => handleOpenDialog(initiative.id)} sx={{ color: 'text.secondary' }}>
                 <AddCircleOutline sx={{ fontSize: 18 }} />
@@ -423,6 +483,7 @@ export default function InitiativesList() {
           >
             Mind Map
           </Button>
+          <AISuggestionsButton canvasId={activeCanvasId} />
           <Button
             variant="contained"
             startIcon={<Add />}
@@ -719,6 +780,13 @@ export default function InitiativesList() {
         open={drawerOpen}
         initiativeId={drawerInitiativeId}
         onClose={() => setDrawerOpen(false)}
+      />
+
+      {/* Summary Dialog */}
+      <InitiativeSummaryDialog
+        open={!!summaryId}
+        initiativeId={summaryId}
+        onClose={() => setSummaryId(null)}
       />
 
       {/* Quick create user dialog */}

@@ -7,6 +7,7 @@ import InitiativesList from './pages/InitiativesList';
 import MindMap from './pages/MindMap';
 import Tasks from './pages/Tasks';
 import Users from './pages/Users';
+import Brainstorm from './pages/Brainstorm';
 import Layout from './components/Layout';
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
         <Route path="/initiatives" element={<InitiativesList />} />
         <Route path="/mindmap" element={<MindMap />} />
         <Route path="/tasks" element={<Tasks />} />
+        <Route path="/brainstorm" element={<Brainstorm />} />
         <Route path="/users" element={<Users />} />
       </Route>
     </Routes>

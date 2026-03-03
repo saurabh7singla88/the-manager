@@ -12,13 +12,15 @@ router.use(authenticate);
 // Get all initiatives (with filtering)
 router.get('/', async (req, res, next) => {
   try {
-    const { status, priority, parentId, search, canvasId, isStandaloneTask } = req.query;
+    const { status, priority, parentId, search, canvasId, isStandaloneTask, type } = req.query;
 
     const where = {};
 
     if (status) where.status = status;
     if (priority) where.priority = priority;
+    if (type) where.type = type;
     if (isStandaloneTask === 'true') where.isStandaloneTask = true;
+    if (isStandaloneTask === 'false') where.isStandaloneTask = false;
 
     // Canvas filter: when canvasId is given and no parentId filter (flat fetch for mind map),
     // include the canvas items AND all their descendants (children lack canvasId on their own).

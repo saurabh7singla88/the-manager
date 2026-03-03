@@ -1,14 +1,15 @@
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
-  Typography, Grid, Box, Button, Chip, LinearProgress, Divider
+  Typography, Grid, Box, Button, Chip, LinearProgress, Divider,
 } from '@mui/material';
 import {
   Add, CheckCircleOutline, AccessTime, Block, TrendingUp,
-  ChevronRight, AccountTree, TaskAlt
+  ChevronRight, AccountTree, TaskAlt,
 } from '@mui/icons-material';
 import { fetchAllInitiatives } from '../features/initiatives/initiativesSlice';
 import { useNavigate } from 'react-router-dom';
+import AIPriorityStrip from '../components/AIPriorityStrip';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -18,7 +19,6 @@ const STATUS_CONFIG = {
   COMPLETED:   { label: 'Completed',   color: '#059669', bg: '#f0fdf4' },
   CANCELLED:   { label: 'Cancelled',   color: '#6b7280', bg: '#f9fafb' },
 };
-
 const PRIORITY_CONFIG = {
   CRITICAL: { color: '#dc2626', bg: '#fef2f2' },
   HIGH:     { color: '#d97706', bg: '#fffbeb' },
@@ -81,6 +81,24 @@ export default function Dashboard() {
           New Initiative
         </Button>
       </Box>
+
+      {/* ── AI Prioritization Suggestions ── */}
+      <AIPriorityStrip
+        mode="initiatives"
+        limit={5}
+        title="AI Priority Suggestions"
+        onCardClick={id => navigate(`/initiatives?open=${id}`)}
+        sx={{ mb: 3 }}
+      />
+
+      {/* ── AI Task Priorities ── */}
+      <AIPriorityStrip
+        mode="tasks"
+        limit={5}
+        title="Task Priorities"
+        onCardClick={id => navigate(`/tasks?open=${id}`)}
+        sx={{ mb: 4 }}
+      />
 
       {/* ── Top-level initiative stat cards ── */}
       <Box mb={1}>

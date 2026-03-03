@@ -33,6 +33,7 @@ model User {
   activityLogs ActivityLog[]
   links Link[]
   canvases Canvas[]
+  brainstormCanvas BrainstormCanvas?
 
   @@map("users")
 }
@@ -196,4 +197,18 @@ model Canvas {
 
   @@index([createdById])
   @@map("canvases")
+}
+
+model BrainstormCanvas {
+  id        String   @id @default(uuid())
+  nodes     Json     @default("[]")
+  edges     Json     @default("[]")
+
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("brainstorm_canvases")
 }

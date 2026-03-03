@@ -124,6 +124,78 @@
 - Task detail opens in the same `InitiativeDetailDrawer` (links, comments, activity all available)
 - Tasks are **not** shown in the Mind Map view (they are not spatial/hierarchical nodes)
 
+### 3.10 Brainstorming Canvas
+
+A free-form scratch-pad for ideation, separate from the structured Initiatives/MindMap views.
+
+**Purpose:** Let users quickly sketch ideas as shapes and text, connect them with arrows, then promote finished blocks to real initiatives with one click.
+
+**Canvas behaviour**
+- Infinite free-form canvas powered by React Flow (same library as Mind Map)
+- State is local (in-memory) — not persisted to the database; intentionally ephemeral
+- Clearing the canvas or navigating away discards the board
+
+**Shape palette (toolbar)**
+| Shape | Use |
+|---|---|
+| Rectangle (Box) | Default idea block |
+| Circle | Concept / key term |
+| Diamond | Decision / branch point |
+| Sticky Note | Quick annotation (yellow) |
+| Text | Plain floating label |
+
+**Interactions**
+- Click a shape in the toolbar → click anywhere on the canvas to place it
+- Double-click any shape to edit its label inline
+- Drag from a node handle to another node to draw an arrow edge
+- Select + `Delete`/`Backspace` to remove nodes or edges
+- Multi-select with rubber-band drag or Shift+click
+- Zoom + pan (mouse wheel / trackpad)
+- "Clear All" button resets the canvas
+
+**Push to Initiative**
+- Select one or more nodes → "Push to Initiative" button becomes active in the toolbar
+- Opens a dialog pre-filled with the node label as the title
+- User can set: Title, Description, Type (INITIATIVE / TASK), Status, Priority, Canvas
+- **Single node:** creates one Initiative record
+- **Multiple nodes + edges:** creates a tree — edges between selected nodes determine parent-child relationships; the root node (no incoming edge from the selection) becomes the parent initiative, connected children become sub-initiatives
+- On success: a success toast is shown and the pushed block(s) get a subtle ✓ badge
+
+**Navigation:** Available in the sidebar as "Brainstorm" (Lightbulb icon)
+
+### 3.11 AI Prioritization Suggestions ✅ Implemented
+
+An intelligent advisor that analyses all active initiatives and surfaces the ones that need attention most urgently.
+
+**How it works**
+- Triggered by the **"AI Suggestions"** button in the Dashboard header and the Initiatives toolbar
+- Opens a right-side drawer ranking up to 8 initiatives by computed urgency score
+- Each suggestion shows: rank badge, status + priority chips, and up to 3 plain-English reason chips
+
+**Scoring signals (structural)**
+| Signal | Max pts | Example |
+|---|---|---|
+| Due date | 50 | Overdue by N days, Due today |
+| Status | 38 | Blocked, On Hold |
+| Priority | 40 | CRITICAL, HIGH |
+| Staleness | 22 | No updates for N days |
+| Blocked sub-items | 30 | 2 blocked sub-items |
+| Open sub-item sprawl | 15 | 4 sub-items still open |
+
+**LLM description analysis (Ollama)**
+- All initiative descriptions are sent in a **single batched prompt** to a local Ollama model (`llama3.1:latest` by default)
+- The model reads natural language intent — phrases like "must do", "scaling concern", "urgent", "at risk", "cannot wait" all raise the score
+- Ollama urgency score (0–100) maps to 0–55 bonus points layered on top of structural signals
+- **Graceful fallback:** if Ollama is unavailable or times out (30 s), structural scoring still runs and results are still returned
+- A `🦙 Ollama` badge appears in the panel when LLM analysis successfully ran
+- Configure via env vars: `OLLAMA_BASE_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (default `llama3.1:latest`)
+
+**UI**
+- Reason chips use `🧠` icon for LLM-sourced signals (distinct purple tint) vs structural chips
+- When a `🧠` chip fires, the matching description snippet is quoted inline below the row
+- Manual Refresh button re-runs the full analysis
+- Footer lists all active scoring dimensions
+
 ## 4. Data Models
 
 ### 4.1 Initiative/Node Model
@@ -297,6 +369,36 @@ GET /api/initiatives                   - All initiatives (no filter)
 ```
 `POST /api/initiatives` and `PUT /api/initiatives/:id` accept optional `canvasId` in the request body.
 
+### 5.7 AI Suggestions
+```
+GET    /api/ai/suggestions           - Get ranked prioritization suggestions
+                                       ?limit=<n>       – Max results (default 8)
+                                       ?canvasId=<uuid> – Scope to a specific canvas
+```
+Response shape:
+```json
+{
+  "suggestions": [
+    {
+      "id": "uuid",
+      "title": "string",
+      "description": "string | null",
+      "status": "OPEN | IN_PROGRESS | BLOCKED | ON_HOLD",
+      "priority": "CRITICAL | HIGH | MEDIUM | LOW",
+      "dueDate": "ISO date | null",
+      "parentId": "uuid | null",
+      "score": 84,
+      "reasons": [
+        { "label": "string", "weight": 40, "icon": "🔴" }
+      ]
+    }
+  ],
+  "analysedCount": 12,
+  "llmUsed": true,
+  "generatedAt": "ISO timestamp"
+}
+```
+
 ## 6. UI/UX Design
 
 ### 6.1 Layout Structure
@@ -440,6 +542,19 @@ GET /api/initiatives                   - All initiatives (no filter)
 - [ ] Task detail opens in `InitiativeDetailDrawer` (full links/comments/activity)
 - [ ] `linkedInitiativeId` picker in task create/edit (shows list of INITIATIVE-type items)
 
+### Phase 9: AI Prioritization ✅ Implemented
+**Duration:** Completed March 2026
+
+- [x] `GET /api/ai/suggestions` endpoint — scoring engine with 6 structural signals
+- [x] Batched Ollama LLM call — all descriptions analysed in a single prompt round-trip
+- [x] Graceful fallback — structural scoring runs independently if Ollama is unavailable
+- [x] `AISuggestionsPanel` component — right-side drawer with ranked suggestions
+- [x] `AISuggestionsButton` trigger — placed in Dashboard header and Initiatives toolbar
+- [x] Reason chips with distinct `🧠` icon for LLM-sourced signals
+- [x] Description snippet quoted inline when LLM analysis fired
+- [x] `🦙 Ollama` badge in panel header when LLM was used
+- [x] Configurable via `OLLAMA_BASE_URL` and `OLLAMA_MODEL` env vars
+
 ## 8. Technical Considerations
 
 ### 8.1 Performance
@@ -515,7 +630,7 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 - **Mobile app:** React Native implementation
 - **Notifications:** Email and push notifications
 - **Integrations:** Slack, Teams, Jira, etc.
-- **AI assistance:** Smart prioritization suggestions
+- **AI assistance:** Smart prioritization suggestions ✅ Implemented (Phase 9 — Ollama LLM + structural scoring)
 - **Templates:** Pre-built initiative templates
 - **Gantt chart view:** Timeline visualization
 - **Resource allocation:** Team capacity planning
