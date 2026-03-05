@@ -196,6 +196,43 @@ An intelligent advisor that analyses all active initiatives and surfaces the one
 - Manual Refresh button re-runs the full analysis
 - Footer lists all active scoring dimensions
 
+### 3.12 Notes ✅ Implemented
+
+A dedicated note-taking section for capturing private thoughts, meeting notes, research, or any freeform content — separate from actionable initiatives and tasks.
+
+**Purpose:** Give managers a structured but flexible writing space, with optional password protection for sensitive or confidential content.
+
+**Core behaviour**
+- Notes are standalone pages — not linked to initiatives or tasks
+- Each note has a **title** and a **content** body
+- Notes can be assigned to a **Canvas** for organisation (same `CanvasSelector` pill bar used across the app)
+- The notes list shows: title, last-updated timestamp, canvas badge, and a lock icon (🔒) for protected notes
+- Clicking a note opens it in a full editor panel on the right side of the page
+
+**Canvas scoping**
+- `CanvasSelector` pill bar at the top — identical pill-tab behaviour to Initiatives and Tasks
+- Per-canvas counts in the canvas pills show only note counts (not initiative/task counts)
+- Creating a note stamps it with the currently active canvas, if any
+
+**Password protection (confidential notes)**
+- Any note can be marked **Protected** at creation time or toggled later in the editor
+- Setting protection requires choosing a password at that moment
+- A protected note shows *only its title* in the list; the lock icon indicates it is locked
+- Opening a locked note shows a password prompt; correct entry fetches and displays the full content
+- The unlock is **session-in-memory only** — navigating away re-locks the note
+- Changing protection settings (enable / disable / change password) always requires the current password first
+- Passwords stored as **bcrypt hashes**; plain-text passwords are never persisted or returned
+- The API never returns `content` or `passwordHash` for a locked note without successful authentication
+
+**Note editor**
+- Title editable inline at the top
+- Body: full-height textarea with auto-grow
+- **Auto-save** on a 1-second debounce after each keystroke; "Saved" / "Saving…" indicator
+- Lock icon button in the editor header to toggle protection on the current note
+- Delete note with a confirmation prompt
+
+**Navigation:** Available in the sidebar as **"Notes"** (NoteAlt icon), route `/notes`
+
 ## 4. Data Models
 
 ### 4.1 Initiative/Node Model
@@ -290,6 +327,7 @@ An intelligent advisor that analyses all active initiatives and surfaces the one
   color: String (hex, default: '#6366f1'),
   createdById: UUID (foreign key → User),
   initiatives: Initiative[],   // back-relation
+  notes: Note[],               // back-relation
   createdAt: Timestamp,
   updatedAt: Timestamp
 }
@@ -300,6 +338,38 @@ An intelligent advisor that analyses all active initiatives and surfaces the one
   canvasId: UUID (nullable, FK → Canvas),
   // ... existing fields
 }
+```
+
+### 4.7 Note Model
+```javascript
+{
+  id: UUID,
+  title: String (required),
+  content: String (default: ""),
+  isProtected: Boolean (default: false),
+  passwordHash: String (nullable),  // bcrypt hash — NEVER included in API responses
+  canvasId: UUID (nullable, FK → Canvas),
+  createdById: UUID (foreign key → User),
+  createdAt: Timestamp,
+  updatedAt: Timestamp
+}
+```
+
+**API response shapes:**
+
+*Unprotected note (list or GET):*
+```json
+{ "id": "uuid", "title": "string", "content": "string", "isProtected": false, "canvasId": "uuid|null", "createdAt": "ISO", "updatedAt": "ISO" }
+```
+
+*Protected note (before unlock):*
+```json
+{ "id": "uuid", "title": "string", "isProtected": true, "locked": true, "canvasId": "uuid|null" }
+```
+
+*Protected note (after successful unlock):*
+```json
+{ "id": "uuid", "title": "string", "content": "string", "isProtected": true, "locked": false, "canvasId": "uuid|null", "createdAt": "ISO", "updatedAt": "ISO" }
 ```
 
 ## 5. API Endpoints
@@ -399,6 +469,44 @@ Response shape:
 }
 ```
 
+### 5.8 Notes
+```
+GET    /api/notes                    - List notes for current user (metadata only, no content returned)
+                                       ?canvasId=<uuid>  – Filter by canvas
+                                       ?canvasId=null    – Notes with no canvas
+                                       ?search=<string>  – Filter by title (case-insensitive)
+POST   /api/notes                    - Create a new note
+GET    /api/notes/:id                - Fetch note; returns { locked: true } if protected (no content)
+POST   /api/notes/:id/unlock         - Verify password and return full note content
+PUT    /api/notes/:id                - Update title, content, canvasId, or protection settings
+DELETE /api/notes/:id                - Delete note (owner only)
+```
+
+**POST /api/notes** — request body:
+```json
+{
+  "title": "string (required)",
+  "content": "string (optional, default: '')",
+  "isProtected": false,
+  "password": "string — required when isProtected: true",
+  "canvasId": "uuid | null"
+}
+```
+
+**POST /api/notes/:id/unlock** — request body:
+```json
+{ "password": "string" }
+```
+Returns the full note object with `"locked": false` on success, `401` on wrong password.
+
+**PUT /api/notes/:id** — protection change rules:
+| Intent | Fields to send |
+|---|---|
+| Enable protection | `{ isProtected: true, password: "newpass" }` |
+| Disable protection | `{ isProtected: false, currentPassword: "existing" }` |
+| Change password | `{ isProtected: true, password: "newpass", currentPassword: "existing" }` |
+| Regular content edit (unlocked note) | `{ title: "…", content: "…" }` |
+
 ## 6. UI/UX Design
 
 ### 6.1 Layout Structure
@@ -422,6 +530,7 @@ Response shape:
 - **Mind Map:** Visual graph view
 - **List View:** Hierarchical initiatives list
 - **Tasks:** Standalone tasks with checkbox completion and canvas scoping
+- **Notes:** Freeform note pages with optional password protection, canvas-scoped
 - **My Tasks:** User's assigned items
 - **Next Priority:** Priority queue view
 - **Quick Links:** Saved links library
@@ -555,6 +664,35 @@ Response shape:
 - [x] `🦙 Ollama` badge in panel header when LLM was used
 - [x] Configurable via `OLLAMA_BASE_URL` and `OLLAMA_MODEL` env vars
 
+### Phase 10: Notes ✅ Implemented (backend) / 🚧 In Progress (frontend)
+**Duration:** March 2026
+
+**Backend**
+- [x] `Note` Prisma model — `title`, `content`, `isProtected`, `passwordHash`, `canvasId` FK, `createdById` FK
+- [x] `Canvas` model updated with `notes` back-relation
+- [x] `User` model updated with `notes` back-relation
+- [x] Database migration applied (`add_notes`)
+- [x] `GET /api/notes` — list notes metadata; supports `canvasId` and `search` filters
+- [x] `POST /api/notes` — create note; bcrypt-hash password when `isProtected: true`
+- [x] `GET /api/notes/:id` — returns `{ locked: true }` for protected notes; full note for unprotected
+- [x] `POST /api/notes/:id/unlock` — bcrypt password comparison; full note on match, `401` on mismatch
+- [x] `PUT /api/notes/:id` — update any field; protection changes require `currentPassword` when currently protected
+- [x] `DELETE /api/notes/:id` — owner-only deletion
+- [x] `passwordHash` and `content` never exposed without authentication
+- [x] Notes route registered in `server.js` at `/api/notes`
+
+**Frontend**
+- [ ] `Notes.jsx` page — `CanvasSelector` pill bar, scrollable notes list (left), editor panel (right)
+- [ ] Notes list items: title, updated-at, canvas colour dot, lock icon for protected notes
+- [ ] Editor: inline title field, auto-grow textarea body, 1-second auto-save debounce, "Saved / Saving…" indicator
+- [ ] Password unlock dialog — shown when opening a protected note; clears on navigation
+- [ ] Protection toggle in editor header — password-set dialog (new protection) or confirm-disable dialog
+- [ ] `CanvasSelector` receives `countsByCanvas` (note counts) so canvas pills are accurate
+- [ ] "New Note" button creates a blank note and immediately selects it in the editor
+- [ ] Delete note with confirmation; deselects editor on success
+- [ ] Sidebar nav entry: "Notes" (`NoteAlt` icon), route `/notes`
+- [ ] Route `/notes` added to `App.jsx`
+
 ## 8. Technical Considerations
 
 ### 8.1 Performance
@@ -645,6 +783,6 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 
 ---
 
-**Version:** 1.2  
-**Last Updated:** March 2, 2026  
+**Version:** 1.3  
+**Last Updated:** March 5, 2026  
 **Status:** Draft

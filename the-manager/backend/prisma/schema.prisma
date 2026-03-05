@@ -21,6 +21,9 @@ model User {
   preferences Json?
   
   hasPassword Boolean @default(true)
+  notesPasswordHash String?
+  resetToken    String?
+  resetTokenExpiry DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -34,6 +37,7 @@ model User {
   links Link[]
   canvases Canvas[]
   brainstormCanvas BrainstormCanvas?
+  notes Note[]
 
   @@map("users")
 }
@@ -191,6 +195,7 @@ model Canvas {
   createdBy   User     @relation(fields: [createdById], references: [id])
 
   initiatives Initiative[]
+  notes       Note[]
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -211,4 +216,25 @@ model BrainstormCanvas {
   updatedAt DateTime @updatedAt
 
   @@map("brainstorm_canvases")
+}
+
+model Note {
+  id           String   @id @default(uuid())
+  title        String
+  content      String   @default("")
+  isProtected  Boolean  @default(false)
+  passwordHash String?
+
+  canvasId     String?
+  canvas       Canvas?  @relation(fields: [canvasId], references: [id], onDelete: SetNull)
+
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([createdById])
+  @@index([canvasId])
+  @@map("notes")
 }

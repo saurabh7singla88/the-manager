@@ -58,6 +58,8 @@ const canvasSlice = createSlice({
       initiatives: null,
       mindmap: null,
       tasks: null,
+      notes: null,
+      brainstorm: null,
     },
     loading: false,
     error: null,
