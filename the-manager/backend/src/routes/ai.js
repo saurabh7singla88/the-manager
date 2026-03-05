@@ -242,9 +242,8 @@ router.get('/suggestions', async (req, res, next) => {
     if (mode === 'tasks') {
       where.isStandaloneTask = true;
     } else {
-      // Default: only top-level initiatives (not standalone tasks, not sub-items)
+      // Include all initiatives and sub-initiatives, but exclude standalone tasks
       where.isStandaloneTask = false;
-      where.parentId = null;
     }
 
     const initiatives = await prisma.initiative.findMany({

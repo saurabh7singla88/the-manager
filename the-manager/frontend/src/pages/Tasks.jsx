@@ -29,6 +29,39 @@ const PRIORITY_CONFIG = {
   LOW:      { color: '#64748b', bg: '#f1f5f9' },
 };
 
+const TIMELINE_PRESETS = [
+  { label: 'Today',        key: 'today' },
+  { label: 'This week',    key: 'this_week' },
+  { label: 'Next 2 weeks', key: 'next_2_weeks' },
+  { label: 'This month',   key: 'this_month' },
+  { label: 'Next quarter', key: 'next_quarter' },
+];
+
+function getTimelineDate(key) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  switch (key) {
+    case 'today': break;
+    case 'this_week': {
+      const day = d.getDay();
+      d.setDate(d.getDate() + (day === 0 ? 7 : 7 - day));
+      break;
+    }
+    case 'next_2_weeks': d.setDate(d.getDate() + 14); break;
+    case 'this_month': {
+      d.setFullYear(d.getFullYear(), d.getMonth() + 1, 0);
+      break;
+    }
+    case 'next_quarter': {
+      const endOfNextQtr = (Math.floor(d.getMonth() / 3) + 2) * 3;
+      d.setFullYear(d.getFullYear(), endOfNextQtr, 0);
+      break;
+    }
+    default: return '';
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 const EMPTY_FORM = {
   title: '',
   description: '',
@@ -55,6 +88,7 @@ export default function Tasks() {
 
   // Quick-add
   const [quickTitle, setQuickTitle] = useState('');
+  const [quickDueDate, setQuickDueDate] = useState('');
   const [quickAdding, setQuickAdding] = useState(false);
 
   // Full create/edit dialog
@@ -69,6 +103,22 @@ export default function Tasks() {
     () => [...new Set((tasks || []).flatMap(t => t.tags || []))].sort(),
     [tasks]
   );
+
+  // Per-canvas task counts — fetched independently of canvas filter
+  const [taskCountsByCanvas, setTaskCountsByCanvas] = useState({});
+  const refreshTaskCounts = useCallback(() => {
+    api.get('/initiatives', { params: { isStandaloneTask: 'true' } })
+      .then(r => {
+        const map = {};
+        r.data.forEach(t => {
+          if (t.canvasId) map[t.canvasId] = (map[t.canvasId] || 0) + 1;
+        });
+        setTaskCountsByCanvas(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { refreshTaskCounts(); }, [refreshTaskCounts]);
 
   // Detail drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -157,9 +207,12 @@ export default function Tasks() {
         priority: 'MEDIUM',
         isStandaloneTask: true,
         ...(activeCanvasId && { canvasId: activeCanvasId }),
+        ...(quickDueDate && { dueDate: quickDueDate }),
       }));
       setQuickTitle('');
+      setQuickDueDate('');
       doFetch(search, filterStatus, activeCanvasId);
+      refreshTaskCounts();
     } finally {
       setQuickAdding(false);
     }
@@ -178,6 +231,7 @@ export default function Tasks() {
     if (window.confirm('Delete this task?')) {
       await dispatch(deleteInitiative(id));
       doFetch(search, filterStatus, activeCanvasId);
+      refreshTaskCounts();
     }
   };
 
@@ -222,6 +276,7 @@ export default function Tasks() {
     }
     setDialogOpen(false);
     doFetch(search, filterStatus, activeCanvasId);
+    refreshTaskCounts();
   };
 
   const addTag = (tag) => {
@@ -234,7 +289,7 @@ export default function Tasks() {
   // ── Render ──────────────────────────────────────────────
   return (
     <Box>
-      <CanvasSelector screen="tasks" />
+      <CanvasSelector screen="tasks" countsByCanvas={taskCountsByCanvas} />
 
       {/* Header */}
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
@@ -259,24 +314,48 @@ export default function Tasks() {
 
       {/* Quick-add bar */}
       <Box
-        display="flex" gap={1.5} mb={3}
+        mb={3}
         sx={{ bgcolor: 'background.paper', border: '1px solid #e2e8f0', borderRadius: 3, p: 1.5 }}
       >
-        <CheckBoxIcon sx={{ color: 'text.disabled', mt: 0.5, flexShrink: 0 }} />
-        <TextField
-          fullWidth
-          size="small"
-          variant="standard"
-          placeholder="Quick add a task… (press Enter)"
-          value={quickTitle}
-          onChange={e => setQuickTitle(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd(); }}
-          InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem' } }}
-        />
+        <Box display="flex" gap={1.5}>
+          <CheckBoxIcon sx={{ color: 'text.disabled', mt: 0.5, flexShrink: 0 }} />
+          <TextField
+            fullWidth
+            size="small"
+            variant="standard"
+            placeholder="Quick add a task… (press Enter)"
+            value={quickTitle}
+            onChange={e => setQuickTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd(); }}
+            InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem' } }}
+          />
+          {quickTitle && (
+            <IconButton size="small" onClick={handleQuickAdd} disabled={quickAdding}>
+              {quickAdding ? <CircularProgress size={16} /> : <Add />}
+            </IconButton>
+          )}
+        </Box>
         {quickTitle && (
-          <IconButton size="small" onClick={handleQuickAdd} disabled={quickAdding}>
-            {quickAdding ? <CircularProgress size={16} /> : <Add />}
-          </IconButton>
+          <Box mt={1.25} pl={4}>
+            <Box display="flex" flexWrap="wrap" gap={0.75}>
+              {TIMELINE_PRESETS.map(({ label, key }) => {
+                const val = getTimelineDate(key);
+                const active = quickDueDate === val;
+                return (
+                  <Chip
+                    key={key}
+                    label={label}
+                    size="small"
+                    clickable
+                    onClick={() => setQuickDueDate(active ? '' : val)}
+                    color={active ? 'primary' : 'default'}
+                    variant={active ? 'filled' : 'outlined'}
+                    sx={{ fontSize: '0.72rem', fontWeight: 500 }}
+                  />
+                );
+              })}
+            </Box>
+          </Box>
         )}
       </Box>
 
@@ -479,6 +558,29 @@ export default function Tasks() {
                   <MenuItem value="LOW">Low</MenuItem>
                 </Select>
               </FormControl>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                TIMELINE
+              </Typography>
+              <Box display="flex" flexWrap="wrap" gap={0.75} mb={1.25}>
+                {TIMELINE_PRESETS.map(({ label, key }) => {
+                  const val = getTimelineDate(key);
+                  const active = formData.dueDate === val;
+                  return (
+                    <Chip
+                      key={key}
+                      label={label}
+                      size="small"
+                      clickable
+                      onClick={() => setFormData(p => ({ ...p, dueDate: active ? '' : val }))}
+                      color={active ? 'primary' : 'default'}
+                      variant={active ? 'filled' : 'outlined'}
+                      sx={{ fontSize: '0.72rem', fontWeight: 500 }}
+                    />
+                  );
+                })}
+              </Box>
               <TextField
                 fullWidth size="small" type="date" label="Due date"
                 InputLabelProps={{ shrink: true }}

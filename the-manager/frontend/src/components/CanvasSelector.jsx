@@ -16,7 +16,7 @@ const PALETTE = [
   '#3b82f6', '#64748b',
 ];
 
-export default function CanvasSelector({ screen }) {
+export default function CanvasSelector({ screen, countsByCanvas }) {
   const dispatch = useDispatch();
   const canvases = useSelector(s => s.canvas.canvases);
   const activeCanvasId = useSelector(s => s.canvas.activeCanvasId[screen] ?? null);
@@ -127,11 +127,16 @@ export default function CanvasSelector({ screen }) {
                   sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: active ? 'white' : canvas.color, display: 'inline-block' }}
                 />
                 {canvas.name}
-                {canvas._count?.initiatives > 0 && (
-                  <Box component="span" sx={{ opacity: 0.7, fontSize: '0.65rem' }}>
-                    {' '}({canvas._count.initiatives})
-                  </Box>
-                )}
+                {(() => {
+                  const n = countsByCanvas
+                    ? (countsByCanvas[canvas.id] ?? 0)
+                    : (canvas._count?.initiatives ?? 0);
+                  return n > 0 ? (
+                    <Box component="span" sx={{ opacity: 0.7, fontSize: '0.65rem' }}>
+                      {' '}({n})
+                    </Box>
+                  ) : null;
+                })()}
               </Box>
             }
             size="small"

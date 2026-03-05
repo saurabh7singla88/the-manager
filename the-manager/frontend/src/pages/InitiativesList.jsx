@@ -39,6 +39,39 @@ const PRIORITY_CONFIG = {
 
 const TYPE_LABELS = { INITIATIVE: 'Initiative', TASK: 'Task', SUBTASK: 'Subtask' };
 
+const TIMELINE_PRESETS = [
+  { label: 'Today',        key: 'today' },
+  { label: 'This week',    key: 'this_week' },
+  { label: 'Next 2 weeks', key: 'next_2_weeks' },
+  { label: 'This month',   key: 'this_month' },
+  { label: 'Next quarter', key: 'next_quarter' },
+];
+
+function getTimelineDate(key) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  switch (key) {
+    case 'today': break;
+    case 'this_week': {
+      const day = d.getDay(); // 0=Sun
+      d.setDate(d.getDate() + (day === 0 ? 7 : 7 - day));
+      break;
+    }
+    case 'next_2_weeks': d.setDate(d.getDate() + 14); break;
+    case 'this_month': {
+      d.setFullYear(d.getFullYear(), d.getMonth() + 1, 0);
+      break;
+    }
+    case 'next_quarter': {
+      const endOfNextQtr = (Math.floor(d.getMonth() / 3) + 2) * 3;
+      d.setFullYear(d.getFullYear(), endOfNextQtr, 0);
+      break;
+    }
+    default: return '';
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -58,6 +91,8 @@ export default function InitiativesList() {
     priority: 'MEDIUM',
     parentId: null,
     tags: [],
+    startDate: '',
+    dueDate: '',
   });
   const [tagInput, setTagInput] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -194,6 +229,8 @@ export default function InitiativesList() {
         tags: initiative.tags || [],
         canvasId: initiative.canvasId || null,
         assigneeIds: initiative.assignees?.map(a => a.id) || [],
+        startDate: initiative.startDate ? initiative.startDate.slice(0, 10) : '',
+        dueDate: initiative.dueDate ? initiative.dueDate.slice(0, 10) : '',
       });
       setEditingId(initiative.id);
     } else {
@@ -207,6 +244,8 @@ export default function InitiativesList() {
         tags: [],
         canvasId: activeCanvasId || null,
         assigneeIds: [],
+        startDate: '',
+        dueDate: '',
       });
       setEditingId(null);
     }
@@ -226,6 +265,8 @@ export default function InitiativesList() {
       tags: [],
       canvasId: null,
       assigneeIds: [],
+      startDate: '',
+      dueDate: '',
     });
     setTagInput('');
     setEditingId(null);
@@ -305,6 +346,7 @@ export default function InitiativesList() {
     return (
       <Box key={initiative.id}>
         <Box
+          onClick={() => handleViewDetails(initiative.id)}
           sx={{
             display: 'flex',
             alignItems: 'center',
@@ -317,14 +359,15 @@ export default function InitiativesList() {
             borderLeft: `3px solid ${pc.border}`,
             borderRadius: 2,
             mb: 1,
-            transition: 'box-shadow 0.15s',
-            '&:hover': { boxShadow: '0 2px 8px rgba(0,0,0,0.07)' },
+            cursor: 'pointer',
+            transition: 'box-shadow 0.15s, background-color 0.15s',
+            '&:hover': { boxShadow: '0 2px 8px rgba(0,0,0,0.07)', bgcolor: '#f8fafc' },
           }}
         >
           {/* Expand toggle */}
           <Box sx={{ width: 28, flexShrink: 0 }}>
             {hasChildren ? (
-              <IconButton size="small" onClick={() => toggleExpand(initiative.id)} sx={{ p: 0.25 }}>
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleExpand(initiative.id); }} sx={{ p: 0.25 }}>
                 {isExpanded ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
               </IconButton>
             ) : null}
@@ -349,7 +392,7 @@ export default function InitiativesList() {
               </Typography>
             )}
             <Box display="flex" gap={0.75} mt={0.75} flexWrap="wrap" alignItems="center">
-              <FormControl size="small">
+              <FormControl size="small" onClick={e => e.stopPropagation()}>
                 <Select
                   value={initiative.status}
                   onChange={(e) => handleStatusChange(initiative.id, e.target.value)}
@@ -365,7 +408,7 @@ export default function InitiativesList() {
                   ))}
                 </Select>
               </FormControl>
-              <FormControl size="small">
+              <FormControl size="small" onClick={e => e.stopPropagation()}>
                 <Select
                   value={initiative.priority}
                   onChange={(e) => handlePriorityChange(initiative.id, e.target.value)}
@@ -418,7 +461,7 @@ export default function InitiativesList() {
           </Box>
 
           {/* Actions */}
-          <Box display="flex" gap={0.25} flexShrink={0}>
+          <Box display="flex" gap={0.25} flexShrink={0} onClick={e => e.stopPropagation()}>
             <Tooltip title="View details">
               <IconButton size="small" onClick={() => handleViewDetails(initiative.id)} sx={{ color: 'primary.main' }}>
                 <Visibility sx={{ fontSize: 17 }} />
@@ -715,6 +758,53 @@ export default function InitiativesList() {
                   </MenuItem>
                 </Select>
               </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
+                TIMELINE
+              </Typography>
+              <Box display="flex" flexWrap="wrap" gap={0.75} mb={1.5}>
+                {TIMELINE_PRESETS.map(({ label, key }) => {
+                  const val = getTimelineDate(key);
+                  const active = formData.dueDate === val;
+                  return (
+                    <Chip
+                      key={key}
+                      label={label}
+                      size="small"
+                      clickable
+                      onClick={() => setFormData(f => ({ ...f, dueDate: active ? '' : val }))}
+                      color={active ? 'primary' : 'default'}
+                      variant={active ? 'filled' : 'outlined'}
+                      sx={{ fontSize: '0.72rem', fontWeight: 500 }}
+                    />
+                  );
+                })}
+              </Box>
+              <Grid container spacing={2}>
+                <Grid item xs={6}>
+                  <TextField
+                    fullWidth
+                    type="date"
+                    label="Start Date"
+                    size="small"
+                    value={formData.startDate}
+                    onChange={e => setFormData(f => ({ ...f, startDate: e.target.value }))}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    fullWidth
+                    type="date"
+                    label="Due Date"
+                    size="small"
+                    value={formData.dueDate}
+                    onChange={e => setFormData(f => ({ ...f, dueDate: e.target.value }))}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+              </Grid>
             </Grid>
             <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.75}>
