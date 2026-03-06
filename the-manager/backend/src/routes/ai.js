@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import logger from '../lib/logger.js';
 
 const router = Router();
 router.use(authenticate);
@@ -40,10 +41,16 @@ async function callOllama(settings, systemPrompt, userPrompt) {
         messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logger.error(`Ollama non-OK response`, { status: res.status, model: settings.ai_ollama_model });
+      return null;
+    }
     const data = await res.json();
     return (data.message?.content || data.response || '').trim();
-  } catch { return null; } finally { clearTimeout(timer); }
+  } catch (e) {
+    logger.error('Ollama call failed', e);
+    return null;
+  } finally { clearTimeout(timer); }
 }
 
 // ─── Provider: OpenAI / OpenAI-compatible (LM Studio, Together AI, etc.) ──────
@@ -63,10 +70,16 @@ async function callOpenAI(settings, systemPrompt, userPrompt) {
         messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logger.error('OpenAI non-OK response', { status: res.status, model: settings.ai_openai_model, base: settings.ai_openai_base_url });
+      return null;
+    }
     const data = await res.json();
     return data.choices?.[0]?.message?.content?.trim() || null;
-  } catch { return null; } finally { clearTimeout(timer); }
+  } catch (e) {
+    logger.error('OpenAI call failed', e);
+    return null;
+  } finally { clearTimeout(timer); }
 }
 
 // ─── Provider: Google Gemini ──────────────────────────────────────────────────
@@ -112,14 +125,18 @@ async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = n
     const data = await res.json();
 
     if (!res.ok) {
-      console.error('Gemini API error:', JSON.stringify(data?.error || data, null, 2));
+      logger.error('Gemini API error', { status: res.status, model: settings.ai_gemini_model, error: data?.error });
       return null;
     }
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!text) return null;
+    if (!text) {
+      logger.warn('Gemini returned no text', { finishReason: data.candidates?.[0]?.finishReason });
+      return null;
+    }
     return text;
-  } catch {
+  } catch (e) {
+    logger.error('Gemini call failed', e);
     return null;
   } finally { clearTimeout(timer); }
 }
@@ -162,7 +179,10 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
   else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
   else if (provider === 'gemini') rawText = await callGemini(settings, systemPrompt, userPrompt, null);
 
-  if (!rawText) return { map: {}, provider };
+  if (!rawText) {
+    logger.warn(`LLM urgency analysis returned no response`, { provider });
+    return { map: {}, provider };
+  }
 
   try {
     const clean = rawText.replace(/^```(?:json)?|```$/gm, '').trim();
@@ -185,7 +205,8 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
       };
     }
     return { map, provider };
-  } catch {
+  } catch (e) {
+    logger.warn('Failed to parse LLM urgency response', { provider, error: e.message });
     return { map: {}, provider };
   }
 }
@@ -473,7 +494,10 @@ ${body}`;
   else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
   else if (provider === 'gemini')       rawText = await callGemini(settings, systemPrompt, userPrompt, ACTION_ITEMS_GEMINI_SCHEMA);
 
-  if (!rawText) return { items: [], provider };
+  if (!rawText) {
+    logger.warn('LLM action-items extraction returned no response', { provider });
+    return { items: [], provider };
+  }
 
   try {
     const clean = rawText.replace(/^```(?:json)?|```$/gm, '').trim();
@@ -490,7 +514,8 @@ ${body}`;
       })).filter(a => a.text.length > 0),
       provider,
     };
-  } catch {
+  } catch (e) {
+    logger.warn('Failed to parse LLM action-items response', { provider, error: e.message });
     return { items: [], provider };
   }
 }

@@ -3,6 +3,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { authenticate } from '../middleware/auth.js';
 import { decrypt } from '../middleware/cipher.js';
+import logger from '../lib/logger.js';
 
 const router = Router();
 router.use(authenticate);
@@ -133,8 +134,10 @@ router.get('/meeting-notes', async (req, res, next) => {
     res.json({ emails, date: since.toISOString(), mailbox, searchTerm });
   } catch (err) {
     if (err.message?.includes('AUTHENTICATIONFAILED') || err.message?.includes('Invalid credentials')) {
+      logger.error('Gmail IMAP authentication failed', { user: process.env.GMAIL_USER });
       return res.status(401).json({ error: 'Gmail authentication failed. Check GMAIL_USER and GMAIL_APP_PASSWORD in .env.' });
     }
+    logger.error('Gmail IMAP error', err);
     next(err);
   } finally {
     await client.logout().catch(() => {});
