@@ -12,8 +12,16 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Chip, IconButton, Skeleton, Tooltip,
 } from '@mui/material';
-import { AutoAwesome, Refresh, FiberManualRecord } from '@mui/icons-material';
+import { AutoAwesome, Refresh, FiberManualRecord, Settings } from '@mui/icons-material';
 import api from '../api/axios';
+import AISettingsDialog from './AISettingsDialog';
+
+const PROVIDER_BADGE = {
+  ollama:            { label: '🦙 Ollama',   color: '#15803d', bg: '#f0fdf4', border: '#bbf7d0' },
+  openai:            { label: '✨ OpenAI',    color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  openai_compatible: { label: '🔌 Custom AI', color: '#6b21a8', bg: '#faf5ff', border: '#e9d5ff' },
+  gemini:            { label: '♊ Gemini',    color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+};
 
 const STATUS_CHIP = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -33,6 +41,7 @@ export default function AIPriorityStrip({
   sx = {},
 }) {
   const [state, setState] = useState({ loading: true, data: null, error: false });
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const load = useCallback(() => {
     setState(prev => ({ ...prev, loading: true, error: false }));
@@ -69,29 +78,43 @@ export default function AIPriorityStrip({
           >
             {heading}
           </Typography>
-          {state.data?.llmUsed && (
-            <Chip
-              label="🦙 Ollama"
-              size="small"
-              sx={{ bgcolor: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', fontWeight: 600, fontSize: '0.62rem', height: 18 }}
-            />
-          )}
+          {state.data?.llmUsed && (() => {
+            const badge = PROVIDER_BADGE[state.data.llmProvider] || PROVIDER_BADGE.ollama;
+            return (
+              <Chip
+                label={badge.label}
+                size="small"
+                sx={{ bgcolor: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, fontWeight: 600, fontSize: '0.62rem', height: 18 }}
+              />
+            );
+          })()}
           {state.data && !state.loading && (
             <Typography variant="caption" color="text.secondary">
               {state.data.analysedCount} item{state.data.analysedCount !== 1 ? 's' : ''} analysed
             </Typography>
           )}
         </Box>
-        <Tooltip title="Refresh suggestions">
-          <IconButton
-            size="small"
-            onClick={load}
-            disabled={state.loading}
-            sx={{ color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }}
-          >
-            <Refresh fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <Box display="flex" alignItems="center" gap={0.25}>
+          <Tooltip title="AI Settings">
+            <IconButton
+              size="small"
+              onClick={() => setSettingsOpen(true)}
+              sx={{ color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }}
+            >
+              <Settings fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Refresh suggestions">
+            <IconButton
+              size="small"
+              onClick={load}
+              disabled={state.loading}
+              sx={{ color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }}
+            >
+              <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       {/* Loading skeletons */}
@@ -206,6 +229,11 @@ export default function AIPriorityStrip({
           {state.data?.llmUsed ? ' · description read by LLM' : ''}
         </Typography>
       )}
+      <AISettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => load()}
+      />
     </Box>
   );
 }

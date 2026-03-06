@@ -5,10 +5,18 @@ import {
 } from '@mui/material';
 import {
   AutoAwesome, Close, Refresh, ChevronRight,
-  FiberManualRecord,
+  FiberManualRecord, Settings,
 } from '@mui/icons-material';
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
+import AISettingsDialog from './AISettingsDialog';
+
+const PROVIDER_BADGE = {
+  ollama:            { label: '🦙 Ollama',   color: '#15803d', bg: '#f0fdf4', border: '#bbf7d0' },
+  openai:            { label: '✨ OpenAI',    color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  openai_compatible: { label: '🔌 Custom AI', color: '#6b21a8', bg: '#faf5ff', border: '#e9d5ff' },
+  gemini:            { label: '♊ Gemini',    color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+};
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -59,8 +67,9 @@ export function AISuggestionsButton({ canvasId, sx = {} }) {
 export default function AISuggestionsPanel({ open, onClose, canvasId }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(null); // { suggestions, analysedCount, generatedAt }
+  const [data, setData] = useState(null); // { suggestions, analysedCount, generatedAt, llmProvider }
   const [error, setError] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,6 +125,11 @@ export default function AISuggestionsPanel({ open, onClose, canvasId }) {
           </Box>
         </Box>
         <Box display="flex" alignItems="center" gap={0.5}>
+          <Tooltip title="AI Settings">
+            <IconButton size="small" onClick={() => setSettingsOpen(true)} sx={{ color: 'rgba(255,255,255,0.8)' }}>
+              <Settings fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refresh">
             <IconButton size="small" onClick={load} disabled={loading} sx={{ color: 'rgba(255,255,255,0.8)' }}>
               <Refresh fontSize="small" />
@@ -171,13 +185,16 @@ export default function AISuggestionsPanel({ open, onClose, canvasId }) {
                 Analysed <strong>{data.analysedCount}</strong> active item{data.analysedCount !== 1 ? 's' : ''}
               </Typography>
               <Box display="flex" alignItems="center" gap={1}>
-                {data.llmUsed && (
-                  <Chip
-                    label="🦙 Ollama"
-                    size="small"
-                    sx={{ bgcolor: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', fontWeight: 600, fontSize: '0.65rem', height: 18 }}
-                  />
-                )}
+                {data.llmUsed && (() => {
+                  const badge = PROVIDER_BADGE[data.llmProvider] || PROVIDER_BADGE.ollama;
+                  return (
+                    <Chip
+                      label={badge.label}
+                      size="small"
+                      sx={{ bgcolor: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, fontWeight: 600, fontSize: '0.65rem', height: 18 }}
+                    />
+                  );
+                })()}
                 <Typography variant="caption" color="text.secondary">
                   {data.suggestions.length} suggestion{data.suggestions.length !== 1 ? 's' : ''}
                 </Typography>
@@ -300,6 +317,11 @@ export default function AISuggestionsPanel({ open, onClose, canvasId }) {
           </Box>
         )}
       </Box>
+      <AISettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => { setData(null); load(); }}
+      />
     </Drawer>
   );
 }

@@ -3,25 +3,146 @@ import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
-
 router.use(authenticate);
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-const OLLAMA_BASE  = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL    || 'llama3.1:latest';
-const LLM_TIMEOUT  = 30_000; // ms — local models can be slow
+const LLM_TIMEOUT = 30_000; // ms
 
-// ─── LLM urgency analyser (Ollama) ────────────────────────────────────────────
-// Sends all descriptions in one batched prompt, returns id→{score,reason} map.
-// Gracefully returns {} if Ollama is unavailable or times out.
-async function analyseWithLLM(items) {
+// ─── Default fallback settings (env vars still honoured if no DB entry exists)
+const DEFAULTS = {
+  ai_provider: process.env.AI_PROVIDER || 'ollama',
+  ai_ollama_base_url: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+  ai_ollama_model: process.env.OLLAMA_MODEL || 'llama3.1:latest',
+  ai_openai_base_url: 'https://api.openai.com',
+  ai_openai_model: 'gpt-4o-mini',
+  ai_openai_api_key: '',
+  ai_gemini_model: 'gemini-1.5-flash',
+  ai_gemini_api_key: '',
+};
+
+// ─── Load AI settings from DB (falls back to env/defaults for missing keys) ───
+async function loadAISettings() {
+  const rows = await prisma.appSetting.findMany({ where: { key: { startsWith: 'ai_' } } });
+  const map = { ...DEFAULTS };
+  for (const row of rows) map[row.key] = row.value;
+  return map;
+}
+
+// ─── Provider: Ollama ─────────────────────────────────────────────────────────
+async function callOllama(settings, systemPrompt, userPrompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+  try {
+    const res = await fetch(`${settings.ai_ollama_base_url}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({
+        model: settings.ai_ollama_model, stream: false, format: 'json',
+        options: { temperature: 0.1, num_predict: 1024 },
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data.message?.content || data.response || '').trim();
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+// ─── Provider: OpenAI / OpenAI-compatible (LM Studio, Together AI, etc.) ──────
+async function callOpenAI(settings, systemPrompt, userPrompt) {
+  if (!settings.ai_openai_api_key) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+  try {
+    const base = (settings.ai_openai_base_url || 'https://api.openai.com').replace(/\/$/, '');
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.ai_openai_api_key}` },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: settings.ai_openai_model, temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() || null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+// ─── Provider: Google Gemini ──────────────────────────────────────────────────
+async function callGemini(settings, systemPrompt, userPrompt) {
+  if (!settings.ai_gemini_api_key) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+  try {
+    const model = settings.ai_gemini_model || 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.ai_gemini_api_key}`;
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'object',
+            properties: {
+              results: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    urgency: { type: 'number' },
+                    reason: { type: 'string' },
+                  },
+                  required: ['id', 'urgency', 'reason'],
+                },
+              },
+            },
+            required: ['results'],
+          },
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+        },
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error('Gemini API error:', JSON.stringify(data?.error || data, null, 2));
+      return null;
+    }
+
+    const finishReason = data.candidates?.[0]?.finishReason;
+    if (finishReason && finishReason !== 'STOP') {
+      console.warn('Gemini non-STOP finish reason:', finishReason);
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!text) {
+      console.error('Gemini returned no text. Full response:', JSON.stringify(data, null, 2));
+      return null;
+    }
+    console.log('Gemini raw text:', text.slice(0, 300));
+    return text;
+  } catch (e) {
+    console.error('Gemini call failed:', e.message);
+    return null;
+  } finally { clearTimeout(timer); }
+}
+
+// ─── LLM urgency analyser (provider-agnostic) ─────────────────────────────────
+async function analyseWithLLM(items, settings) {
+  const provider = settings.ai_provider || 'ollama';
+  if (provider === 'disabled') return { map: {}, provider: 'disabled' };
+
   const toAnalyse = items.filter(i => (i.description || '').trim().length > 10);
-  if (toAnalyse.length === 0) return {};
+  if (toAnalyse.length === 0) return { map: {}, provider };
 
   const payload = toAnalyse.map(i => ({
-    id:          i.id,
-    title:       i.title,
-    description: (i.description || '').slice(0, 600),
+    id: i.id, title: i.title, description: (i.description || '').slice(0, 600),
   }));
 
   const systemPrompt = `You are an expert product manager assistant that evaluates work item urgency.
@@ -44,70 +165,37 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
 
   const userPrompt = `Rate the urgency expressed in these initiative descriptions:\n${JSON.stringify(payload, null, 2)}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+  let rawText = null;
+  if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
+  else if (provider === 'openai') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+  else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+  else if (provider === 'gemini') rawText = await callGemini(settings, systemPrompt, userPrompt);
+
+  if (!rawText) return { map: {}, provider };
 
   try {
-    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal:  controller.signal,
-      body: JSON.stringify({
-        model:    OLLAMA_MODEL,
-        stream:   false,
-        format:   'json',
-        options:  { temperature: 0.1, num_predict: 1024 },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt   },
-        ],
-      }),
-    });
-
-    if (!res.ok) return {};
-
-    const data = await res.json();
-    const text = (data.message?.content || data.response || '').trim();
-
-    let parsed;
-    try {
-      const clean = text.replace(/^```(?:json)?|```$/gm, '').trim();
-      parsed = JSON.parse(clean);
-    } catch {
-      return {};
-    }
-
-    // Ollama JSON mode always returns an object — extract the array from "results"
-    // Also handle edge case where it returns a single item object directly
+    const clean = rawText.replace(/^```(?:json)?|```$/gm, '').trim();
+    const parsed = JSON.parse(clean);
     let arr;
-    if (Array.isArray(parsed)) {
-      arr = parsed;
-    } else if (Array.isArray(parsed.results)) {
-      arr = parsed.results;
-    } else if (Array.isArray(parsed.items)) {
-      arr = parsed.items;
-    } else if (parsed.id && typeof parsed.urgency === 'number') {
-      arr = [parsed]; // single object fallback
-    } else {
-      // Try to collect any object values that look like results
-      arr = Object.values(parsed).filter(v => v && typeof v === 'object' && v.id && typeof v.urgency === 'number');
-    }
+    if (Array.isArray(parsed)) arr = parsed;
+    else if (Array.isArray(parsed.results)) arr = parsed.results;
+    else if (Array.isArray(parsed.items)) arr = parsed.items;
+    else if (parsed.id && typeof parsed.urgency === 'number') arr = [parsed];
+    else arr = Object.values(parsed).filter(v => v && typeof v === 'object' && v.id && typeof v.urgency === 'number');
+
     const map = {};
     for (const entry of arr) {
       if (!entry.id || typeof entry.urgency !== 'number') continue;
       const urgency = Math.max(0, Math.min(100, Math.round(entry.urgency)));
-      if (urgency < 10) continue; // ignore near-zero scores
+      if (urgency < 10) continue;
       map[entry.id] = {
-        // Scale 0-100 → 0-55 points so LLM is meaningful but doesn't eclipse hard facts
-        score:  Math.round(urgency * 0.55),
+        score: Math.round(urgency * 0.55),
         reason: (entry.reason || 'Urgency detected in description').slice(0, 80),
       };
     }
-    return map;
+    return { map, provider };
   } catch {
-    return {}; // graceful fallback — structural scoring still works
-  } finally {
-    clearTimeout(timer);
+    return { map: {}, provider };
   }
 }
 
@@ -115,10 +203,10 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
 // Scoring constants
 // ─────────────────────────────────────────────
 const PRIORITY_SCORE = { CRITICAL: 40, HIGH: 28, MEDIUM: 14, LOW: 5 };
-const STATUS_SCORE   = { BLOCKED: 38, IN_PROGRESS: 18, ON_HOLD: 12, OPEN: 6, COMPLETED: -999, CANCELLED: -999 };
+const STATUS_SCORE = { BLOCKED: 38, IN_PROGRESS: 18, ON_HOLD: 12, OPEN: 6, COMPLETED: -999, CANCELLED: -999 };
 
-function daysAgo(date)   { return Math.floor((Date.now() - new Date(date).getTime()) / 86_400_000); }
-function daysUntil(date) { return Math.ceil((new Date(date).getTime()  - Date.now())  / 86_400_000); }
+function daysAgo(date) { return Math.floor((Date.now() - new Date(date).getTime()) / 86_400_000); }
+function daysUntil(date) { return Math.ceil((new Date(date).getTime() - Date.now()) / 86_400_000); }
 
 // ─────────────────────────────────────────────
 // Score a single initiative
@@ -137,12 +225,12 @@ function scoreItem(item, childrenMap, llmMap) {
   const pScore = PRIORITY_SCORE[item.priority] ?? 0;
   score += pScore;
   if (item.priority === 'CRITICAL') reasons.push({ label: 'Critical priority', weight: pScore, icon: '🔴' });
-  else if (item.priority === 'HIGH')     reasons.push({ label: 'High priority',     weight: pScore, icon: '🟠' });
+  else if (item.priority === 'HIGH') reasons.push({ label: 'High priority', weight: pScore, icon: '🟠' });
 
   // 2. Status
   score += base;
-  if (item.status === 'BLOCKED')     reasons.push({ label: 'Currently blocked',   weight: base, icon: '🚫' });
-  else if (item.status === 'ON_HOLD') reasons.push({ label: 'Sitting on hold',    weight: base, icon: '⏸️' });
+  if (item.status === 'BLOCKED') reasons.push({ label: 'Currently blocked', weight: base, icon: '🚫' });
+  else if (item.status === 'ON_HOLD') reasons.push({ label: 'Sitting on hold', weight: base, icon: '⏸️' });
 
   // 3. Due date
   if (item.dueDate) {
@@ -223,6 +311,55 @@ function scoreItem(item, childrenMap, llmMap) {
 }
 
 // ─────────────────────────────────────────────
+// GET /api/ai/settings
+// ─────────────────────────────────────────────
+router.get('/settings', async (req, res, next) => {
+  try {
+    const s = await loadAISettings();
+    const mask = (k) => k ? `${'•'.repeat(Math.max(0, k.length - 4))}${k.slice(-4)}` : '';
+    res.json({
+      provider: s.ai_provider,
+      ollamaBaseUrl: s.ai_ollama_base_url,
+      ollamaModel: s.ai_ollama_model,
+      openaiBaseUrl: s.ai_openai_base_url,
+      openaiModel: s.ai_openai_model,
+      openaiApiKey: mask(s.ai_openai_api_key),
+      openaiApiKeySet: !!s.ai_openai_api_key,
+      geminiModel: s.ai_gemini_model,
+      geminiApiKey: mask(s.ai_gemini_api_key),
+      geminiApiKeySet: !!s.ai_gemini_api_key,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────
+// PUT /api/ai/settings
+// ─────────────────────────────────────────────
+router.put('/settings', async (req, res, next) => {
+  try {
+    const { provider, ollamaBaseUrl, ollamaModel, openaiBaseUrl, openaiModel, openaiApiKey, geminiModel, geminiApiKey } = req.body;
+    const updates = {};
+    if (provider != null) updates.ai_provider = provider;
+    if (ollamaBaseUrl != null) updates.ai_ollama_base_url = ollamaBaseUrl;
+    if (ollamaModel != null) updates.ai_ollama_model = ollamaModel;
+    if (openaiBaseUrl != null) updates.ai_openai_base_url = openaiBaseUrl;
+    if (openaiModel != null) updates.ai_openai_model = openaiModel;
+    if (openaiApiKey != null && openaiApiKey !== '' && !openaiApiKey.startsWith('•'))
+      updates.ai_openai_api_key = openaiApiKey;
+    if (geminiModel != null) updates.ai_gemini_model = geminiModel;
+    if (geminiApiKey != null && geminiApiKey !== '' && !geminiApiKey.startsWith('•'))
+      updates.ai_gemini_api_key = geminiApiKey;
+
+    await Promise.all(
+      Object.entries(updates).map(([key, value]) =>
+        prisma.appSetting.upsert({ where: { key }, update: { value }, create: { key, value } })
+      )
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────
 // GET /api/ai/suggestions
 // ─────────────────────────────────────────────
 router.get('/suggestions', async (req, res, next) => {
@@ -259,11 +396,11 @@ router.get('/suggestions', async (req, res, next) => {
       return res.json({ suggestions: [], analysedCount: 0 });
     }
 
-    // Build children map + run LLM analysis in parallel
     const childrenMap = {};
     for (const item of initiatives) childrenMap[item.id] = item.children || [];
 
-    const llmMap  = await analyseWithLLM(initiatives);
+    const settings = await loadAISettings();
+    const { map: llmMap, provider: llmProvider } = await analyseWithLLM(initiatives, settings);
     const llmUsed = Object.keys(llmMap).length > 0;
 
     // Score every initiative
@@ -293,6 +430,7 @@ router.get('/suggestions', async (req, res, next) => {
       suggestions,
       analysedCount: initiatives.length,
       llmUsed,
+      llmProvider: llmUsed ? llmProvider : null,
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {

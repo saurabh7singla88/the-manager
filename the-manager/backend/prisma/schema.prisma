@@ -216,3 +216,11 @@ model Note {
   @@index([canvasId])
   @@map("notes")
 }
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
