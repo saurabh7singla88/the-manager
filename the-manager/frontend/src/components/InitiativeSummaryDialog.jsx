@@ -23,8 +23,9 @@ const STATUS_EMOJI = {
 
 const buildSubtree = async (id) => {
   const { data: children } = await api.get(`/initiatives?parentId=${id}`);
+  const sorted = [...children].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const result = [];
-  for (const child of children) {
+  for (const child of sorted) {
     const node = { ...child, subChildren: [] };
     if (child._count?.children > 0) {
       node.subChildren = await buildSubtree(child.id);
@@ -37,16 +38,39 @@ const buildSubtree = async (id) => {
 const formatSubtree = (nodes, depth = 0) => {
   if (!nodes.length) return '';
   const indent = '  '.repeat(depth);
+  const subIndent = '  '.repeat(depth + 1);
   return nodes.map(node => {
     const emoji = STATUS_EMOJI[node.status] || '⬜';
     const due = node.dueDate ? ` · Due ${format(new Date(node.dueDate), 'MMM d, yyyy')}` : '';
     const priority = node.priority && node.priority !== 'MEDIUM' ? ` [${node.priority}]` : '';
-    const lines = [`${indent}${emoji} ${node.title}${priority}${due}`];
+    const statusLabel = STATUS_CONFIG[node.status]?.label || node.status;
+    const lines = [`${indent}${emoji} ${node.title}${priority}${due}  (${statusLabel})`];
+    if (node.description?.trim()) {
+      lines.push(`${subIndent}↳ ${node.description.trim().replace(/\n/g, ' ')}`);
+    }
+    if (node.assignees?.length) {
+      lines.push(`${subIndent}👤 ${node.assignees.map(a => a.name).join(', ')}`);
+    }
+    if (node.tags?.length) {
+      lines.push(`${subIndent}🏷  ${node.tags.join(', ')}`);
+    }
     if (node.subChildren?.length) {
       lines.push(formatSubtree(node.subChildren, depth + 1));
     }
     return lines.join('\n');
   }).join('\n');
+};
+
+const countByStatus = (nodes) => {
+  const counts = {};
+  for (const node of nodes) {
+    counts[node.status] = (counts[node.status] || 0) + 1;
+    if (node.subChildren?.length) {
+      const sub = countByStatus(node.subChildren);
+      for (const [k, v] of Object.entries(sub)) counts[k] = (counts[k] || 0) + v;
+    }
+  }
+  return counts;
 };
 
 export default function InitiativeSummaryDialog({ open, onClose, initiativeId, initiativeData }) {
@@ -88,7 +112,14 @@ export default function InitiativeSummaryDialog({ open, onClose, initiativeId, i
 
         if (subtree.length) {
           lines.push(div);
-          lines.push('SUB-TASKS');
+          // Status breakdown across all descendants
+          const statusCounts = countByStatus(subtree);
+          const total = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+          const breakdown = Object.entries(statusCounts)
+            .map(([s, n]) => `${STATUS_EMOJI[s] || '⬜'} ${STATUS_CONFIG[s]?.label || s}: ${n}`)
+            .join('  ·  ');
+          lines.push(`SUB-TASKS  (${total} total)  ${breakdown}`);
+          lines.push(div);
           lines.push(formatSubtree(subtree, 0));
           lines.push('');
         }
