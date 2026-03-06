@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -16,9 +16,9 @@ model User {
   password  String
   name      String
   avatar    String?
-  role      Role     @default(MANAGER)
+  role      String   @default("MANAGER")
   
-  preferences Json?
+  preferences String?  // stored as JSON text
   
   hasPassword Boolean @default(true)
   notesPasswordHash String?
@@ -46,7 +46,7 @@ model Initiative {
   id          String   @id @default(uuid())
   title       String
   description String?
-  type        InitiativeType @default(INITIATIVE)
+  type        String @default("INITIATIVE")
   
   // Hierarchy
   parentId    String?
@@ -54,8 +54,8 @@ model Initiative {
   children    Initiative[] @relation("InitiativeChildren")
   
   // Status & Priority
-  status      Status   @default(OPEN)
-  priority    Priority @default(MEDIUM)
+  status      String   @default("OPEN")
+  priority    String   @default("MEDIUM")
   
   // Dates & Progress
   startDate   DateTime?
@@ -64,7 +64,7 @@ model Initiative {
   progress    Int      @default(0) // 0-100
   
   // Tags & Metadata
-  tags        String[]
+  tags        String   @default("[]")
 
   // Standalone task flag & optional initiative link
   isStandaloneTask    Boolean  @default(false)
@@ -107,7 +107,7 @@ model Link {
   title         String?
   description   String?
   category      String?
-  tags          String[]
+  tags          String   @default("[]")
   
   initiativeId  String
   initiative    Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
@@ -142,7 +142,7 @@ model Comment {
 model ActivityLog {
   id            String   @id @default(uuid())
   action        String
-  changes       Json?
+  changes       String?  // stored as JSON text
   
   initiativeId  String
   initiative    Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
@@ -157,33 +157,11 @@ model ActivityLog {
   @@map("activity_logs")
 }
 
-enum Role {
-  ADMIN
-  MANAGER
-  VIEWER
-}
-
-enum InitiativeType {
-  INITIATIVE
-  TASK
-  SUBTASK
-}
-
-enum Status {
-  OPEN
-  IN_PROGRESS
-  BLOCKED
-  ON_HOLD
-  COMPLETED
-  CANCELLED
-}
-
-enum Priority {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-}
+// Note: enums are emulated as String fields for SQLite compatibility.
+// Valid Role values:          ADMIN | MANAGER | VIEWER
+// Valid InitiativeType values: INITIATIVE | TASK | SUBTASK
+// Valid Status values:        OPEN | IN_PROGRESS | BLOCKED | ON_HOLD | COMPLETED | CANCELLED
+// Valid Priority values:      CRITICAL | HIGH | MEDIUM | LOW
 
 model Canvas {
   id          String   @id @default(uuid())
@@ -206,8 +184,8 @@ model Canvas {
 
 model BrainstormCanvas {
   id        String   @id @default(uuid())
-  nodes     Json     @default("[]")
-  edges     Json     @default("[]")
+  nodes     String   @default("[]")
+  edges     String   @default("[]")
 
   userId    String   @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -1,10 +1,9 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.use(authenticate);
 
@@ -93,7 +92,7 @@ router.get('/', async (req, res) => {
     const where = { createdById: req.user.id };
     if (canvasId === 'null' || canvasId === '') where.canvasId = null;
     else if (canvasId) where.canvasId = canvasId;
-    if (search) where.title = { contains: search, mode: 'insensitive' };
+    if (search) where.title = { contains: search };
 
     const notes = await prisma.note.findMany({
       where,

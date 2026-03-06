@@ -137,11 +137,16 @@ function getDescendants(id, childrenOf) {
   return result;
 }
 
+// Persists across React Router navigations (module-level, one instance).
+// Shape: { [canvasKey: string]: { x, y, zoom } }
+const savedViewports = {};
+
 function MindMapInner() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { allItems, allItemsLoading } = useSelector(state => state.initiatives);
   const { activeCanvasId } = useSelector(state => ({ activeCanvasId: state.canvas.activeCanvasId.mindmap }));
+  const canvasKey = activeCanvasId ?? 'all';
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -161,11 +166,55 @@ function MindMapInner() {
   });
   const [tagInput, setTagInput] = useState('');
   const [users, setUsers] = useState([]);
+  const [selectedRootId, setSelectedRootId] = useState(null);
 
   const allTags = useMemo(
     () => [...new Set((allItems || []).flatMap(i => i.tags || []))].sort(),
     [allItems]
   );
+
+  const { getNodes, fitView, setViewport } = useReactFlow();
+  const initialFitDoneRef = useRef(false);
+  // Key = canvasKey:selectedRootId — tracks which view has already been positioned.
+  const viewportRestoredRef = useRef(null);
+  const prevSelectedRootRef = useRef(undefined);
+
+  // Reset guards when the canvas changes.
+  useEffect(() => {
+    initialFitDoneRef.current = false;
+    viewportRestoredRef.current = null;
+    prevSelectedRootRef.current = undefined;
+  }, [canvasKey]);
+
+  // Restore / fit viewport after nodes are populated & positioned.
+  useEffect(() => {
+    if (nodes.length === 0) return;
+
+    const viewKey = `${canvasKey}:${selectedRootId ?? 'all'}`;
+    const selectionChanged = prevSelectedRootRef.current !== selectedRootId;
+    prevSelectedRootRef.current = selectedRootId;
+
+    // Already handled this exact view — don't re-run unless selection changed
+    if (!selectionChanged && viewportRestoredRef.current === viewKey) return;
+    viewportRestoredRef.current = viewKey;
+    initialFitDoneRef.current = true;
+
+    const saved = savedViewports[viewKey];
+    if (saved && !selectionChanged) {
+      // Returning to a view the user has panned before — restore their position
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => setViewport(saved))
+      );
+    } else {
+      // First visit OR user just drilled into a different initiative — fit nodes
+      setTimeout(() => fitView({ padding: 0.06, minZoom: 0.5, maxZoom: 1, duration: 350 }), 150);
+    }
+  }, [nodes, canvasKey, selectedRootId, setViewport, fitView]);
+
+  // Persist viewport whenever the user finishes panning or zooming
+  const onMoveEnd = useCallback((_event, viewport) => {
+    savedViewports[`${canvasKey}:${selectedRootId ?? 'all'}`] = viewport;
+  }, [canvasKey, selectedRootId]);
 
   // Quick user create
   const [quickUserOpen, setQuickUserOpen] = useState(false);
@@ -173,7 +222,6 @@ function MindMapInner() {
   const [quickUserRole, setQuickUserRole] = useState('VIEWER');
   const [quickUserSaving, setQuickUserSaving] = useState(false);
 
-  const { getNodes, fitView } = useReactFlow();
   const [exportMsg, setExportMsg] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
@@ -351,8 +399,31 @@ function MindMapInner() {
     return hidden;
   }, [collapsed, childrenOf]);
 
+  // ── Per-initiative drill-down ──────────────────────────────────────────────
+
+  // Root-level initiatives for the left panel list
+  const rootInitiatives = useMemo(
+    () => displayItems.filter(i => !i.parentId),
+    [displayItems]
+  );
+
+  // Reset selection when canvas switches
+  useEffect(() => { setSelectedRootId(null); }, [activeCanvasId]);
+
+  // Items actually rendered in the mind map (full set, or just selected root + descendants)
+  const selectedDisplayItems = useMemo(() => {
+    if (!selectedRootId) return displayItems;
+    const included = new Set([selectedRootId]);
+    const queue = [selectedRootId];
+    while (queue.length) {
+      const cur = queue.shift();
+      (childrenOf[cur] || []).forEach(cid => { included.add(cid); queue.push(cid); });
+    }
+    return displayItems.filter(i => included.has(i.id));
+  }, [selectedRootId, displayItems, childrenOf]);
+
   const autoArrange = useCallback(() => {
-    if (!displayItems.length) return;
+    if (!selectedDisplayItems.length) return;
 
     // Snapshot current live positions from React Flow (respects unsaved drags too)
     const livePos = {};
@@ -401,7 +472,7 @@ function MindMapInner() {
       });
     };
 
-    displayItems.filter(i => !i.parentId).forEach(root => {
+    selectedDisplayItems.filter(i => !i.parentId).forEach(root => {
       processChildren(root.id, livePos[root.id] || { x: 0, y: 0 });
     });
 
@@ -416,18 +487,21 @@ function MindMapInner() {
       dispatch(updatePosition({ id, positionX: pos.x, positionY: pos.y }));
     });
 
-    setTimeout(() => fitView({ padding: 0.18, duration: 450 }), 120);
-  }, [nodes, displayItems, childrenOf, dispatch, fitView]);
+    if (!initialFitDoneRef.current) {
+      setTimeout(() => fitView({ padding: 0.18, duration: 450 }), 120);
+      initialFitDoneRef.current = true;
+    }
+  }, [nodes, selectedDisplayItems, childrenOf, dispatch, fitView]);
 
   // Build React Flow nodes + edges
   useEffect(() => {
-    if (!displayItems.length) {
+    if (!selectedDisplayItems.length) {
       setNodes([]);
       setEdges([]);
       return;
     }
 
-    const autoPositions = computeLayout(displayItems);
+    const autoPositions = computeLayout(selectedDisplayItems);
 
     const handleToggleCollapse = (id) => {
       setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
@@ -445,7 +519,7 @@ function MindMapInner() {
       setCreateDialogOpen(true);
     };
 
-    const rfNodes = displayItems
+    const rfNodes = selectedDisplayItems
       .filter(i => !hiddenIds.has(i.id))
       .map(initiative => {
         const savedPos = initiative.positionX != null && initiative.positionY != null;
@@ -454,9 +528,9 @@ function MindMapInner() {
           pos = { x: initiative.positionX, y: initiative.positionY };
         } else if (initiative.parentId) {
           // Place near parent if parent has a saved position
-          const parent = displayItems.find(p => p.id === initiative.parentId);
+          const parent = selectedDisplayItems.find(p => p.id === initiative.parentId);
           if (parent && parent.positionX != null && parent.positionY != null) {
-            const placedSiblings = displayItems.filter(
+            const placedSiblings = selectedDisplayItems.filter(
               s => s.parentId === initiative.parentId && s.positionX != null && s.id !== initiative.id
             );
             const offsetX = placedSiblings.length * (NODE_WIDTH + H_GAP);
@@ -482,7 +556,7 @@ function MindMapInner() {
         };
       });
 
-    const rfEdges = displayItems
+    const rfEdges = selectedDisplayItems
       .filter(i => i.parentId && !hiddenIds.has(i.id) && !hiddenIds.has(i.parentId))
       .map(initiative => ({
         id: `e-${initiative.parentId}-${initiative.id}`,
@@ -496,7 +570,7 @@ function MindMapInner() {
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [displayItems, collapsed, hiddenIds]);
+  }, [selectedDisplayItems, collapsed, hiddenIds]);
 
   const onNodeDragStop = useCallback((_, node, draggedNodes) => {
     // Save positions for all nodes that moved (supports group drag)
@@ -548,168 +622,243 @@ function MindMapInner() {
   return (
     <Box sx={{ height: 'calc(100vh - 90px)', display: 'flex', flexDirection: 'column' }}>
       <CanvasSelector screen="mindmap" />
-      {/* Toolbar */}
-      <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
-        <Box>
-          <Typography variant="h4" fontWeight={700}>Mind Map</Typography>
-          <Typography variant="body2" color="text.secondary" mt={0.5}>
-            {displayItems.length} initiative{displayItems.length !== 1 ? 's' : ''} · drag to rearrange
-          </Typography>
-        </Box>
-        <Box display="flex" gap={1} alignItems="center">
-          <Tooltip title="Export as image">
-            <span>
-              <IconButton
-                onClick={e => setExportMenuAnchor(e.currentTarget)}
-                disabled={exporting}
+
+      {/* ── SPLIT PANEL CONTAINER ────────────────────────────────────────── */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 3, bgcolor: 'background.paper' }}>
+
+        {/* ── LEFT PANEL ─────────────────────────────────────────────────── */}
+        <Box sx={{ width: 280, flexShrink: 0, borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Header */}
+          <Box sx={{ px: 2, pt: 2, pb: 1.5 }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center">
+              <Typography variant="subtitle1" fontWeight={700}>Mind Map</Typography>
+              <Button
                 size="small"
-                sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+                variant="contained"
+                startIcon={<Add />}
+                onClick={() => {
+                  setCreateParentId(null);
+                  setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
+                  setTagInput('');
+                  setCreateDialogOpen(true);
+                }}
               >
-                {exporting ? <CircularProgress size={16} /> : <Download fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
-          <MuiMenu
-            anchorEl={exportMenuAnchor}
-            open={Boolean(exportMenuAnchor)}
-            onClose={() => setExportMenuAnchor(null)}
-            PaperProps={{ sx: { borderRadius: 2, minWidth: 200, boxShadow: '0 4px 20px rgba(0,0,0,0.12)' } }}
-          >
-            <MuiMenuItem dense onClick={handleExportImage} sx={{ gap: 1.5 }}>
-              <SelectAll sx={{ fontSize: 18, color: 'text.secondary' }} />
-              <Box>
-                <Typography variant="body2" fontWeight={500}>Export all</Typography>
-                <Typography variant="caption" color="text.secondary">Save entire mind map</Typography>
-              </Box>
-            </MuiMenuItem>
-            <MuiMenuItem
-              dense
-              onClick={handleExportSelected}
-              disabled={selectedNodeIds.length === 0}
-              sx={{ gap: 1.5 }}
-            >
-              <CropFree sx={{ fontSize: 18, color: 'text.secondary' }} />
-              <Box>
-                <Typography variant="body2" fontWeight={500}>
-                  Export selected{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ''}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {selectedNodeIds.length === 0 ? 'Select nodes first' : 'Save selected nodes only'}
-                </Typography>
-              </Box>
-            </MuiMenuItem>
-          </MuiMenu>
-          <Tooltip title="Auto-arrange: clean up layout, keeping trees near their current positions">
-            <IconButton
-              onClick={autoArrange}
-              size="small"
-              sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
-            >
-              <AutoFixHigh fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Refresh">
-            <IconButton
-              onClick={() => dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }))}
-              size="small"
-              sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
-            >
-              <Refresh fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Button
-            variant="outlined"
-            startIcon={<ListIcon />}
-            onClick={() => navigate('/initiatives')}
-          >
-            List View
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={() => {
-              setCreateParentId(null);
-              setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
-              setTagInput('');
-              setCreateDialogOpen(true);
-            }}
-          >
-            New Initiative
-          </Button>
-        </Box>
-      </Box>
-
-      {/* React Flow canvas */}
-      <Box sx={{ flex: 1, border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden', bgcolor: '#f5f6fa' }}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={NODE_TYPES}
-          onNodeDragStop={onNodeDragStop}
-          onNodeDoubleClick={onNodeDoubleClick}
-          onSelectionChange={({ nodes: sel }) => setSelectedNodeIds((sel || []).map(n => n.id))}
-          selectionOnDrag
-          panOnDrag={[1, 2]}
-          multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
-          selectionKeyCode={null}
-          fitView
-          fitViewOptions={{ padding: 0.5, maxZoom: 0.8 }}
-          minZoom={0.08}
-          maxZoom={2}
-          defaultEdgeOptions={{ type: 'smoothstep' }}
-        >
-          <Background variant="dots" color="#c7d2fe" gap={28} size={1.5} />
-          <Controls
-            style={{
-              boxShadow: '0 2px 12px rgba(0,0,0,0.1)',
-              borderRadius: 10,
-              border: '1px solid #e2e8f0',
-              overflow: 'hidden',
-            }}
-          />
-          <MiniMap
-            nodeColor={(node) => STATUS_CONFIG[node.data?.initiative?.status]?.dot || '#94a3b8'}
-            maskColor="rgba(99,102,241,0.06)"
-            style={{ borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-          />
-          {allItems.length === 0 && (
-            <Panel position="top-center">
-              <Box sx={{ bgcolor: 'white', p: 3, borderRadius: 3, boxShadow: '0 4px 20px rgba(0,0,0,0.1)', textAlign: 'center', border: '1px solid #e2e8f0' }}>
-                <Typography variant="body2" color="text.secondary" mb={1.5}>No initiatives yet.</Typography>
-                <Button variant="contained" size="small" startIcon={<Add />} onClick={() => setCreateDialogOpen(true)}>
-                  Create First Initiative
-                </Button>
-              </Box>
-            </Panel>
-          )}
-          <Panel position="bottom-center">
-            <Box sx={{ bgcolor: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(6px)', border: '1px solid #e2e8f0', borderRadius: 6, px: 1.75, py: 0.5, display: 'flex', gap: 2 }}>
-              <Typography variant="caption" color="text.disabled">Drag canvas to select · Shift+click to add · Double-click to open</Typography>
+                New
+              </Button>
             </Box>
-          </Panel>
-        </ReactFlow>
-      </Box>
+          </Box>
+          <Divider />
 
-      {/* Legend */}
-      <Box
-        display="flex" gap={1} mt={1.5} flexWrap="wrap" alignItems="center"
-        sx={{ px: 2, py: 0.75, bgcolor: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(8px)', borderRadius: 2, border: '1px solid #e2e8f0' }}
-      >
-        {Object.entries(STATUS_CONFIG).map(([status, cfg]) => (
-          <Box key={status} display="flex" alignItems="center" gap={0.5}>
-            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: cfg.dot }} />
-            <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{cfg.label}</Typography>
+          {/* "All" row */}
+          <Box
+            onClick={() => setSelectedRootId(null)}
+            sx={{
+              px: 2, py: 1.5, cursor: 'pointer',
+              borderLeft: selectedRootId === null ? '3px solid #6366f1' : '3px solid transparent',
+              bgcolor: selectedRootId === null ? '#f5f3ff' : 'transparent',
+              '&:hover': { bgcolor: selectedRootId === null ? '#f5f3ff' : '#f8fafc' },
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}
+          >
+            <Typography variant="body2" fontWeight={600} color={selectedRootId === null ? '#4f46e5' : 'text.primary'}>
+              All initiatives
+            </Typography>
+            <Typography variant="caption" color="text.disabled">{displayItems.length}</Typography>
           </Box>
-        ))}
-        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-        {Object.entries(PRIORITY_COLORS).map(([p, color]) => (
-          <Box key={p} display="flex" alignItems="center" gap={0.4}>
-            <Box sx={{ width: 3, height: 12, bgcolor: color, borderRadius: 1 }} />
-            <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{p.charAt(0) + p.slice(1).toLowerCase()}</Typography>
+          <Divider />
+
+          {/* Root initiatives list */}
+          <Box sx={{ flex: 1, overflowY: 'auto' }}>
+            {rootInitiatives.map(init => {
+              const isActive = selectedRootId === init.id;
+              const childCount = (childrenOf[init.id] || []).length;
+              return (
+                <Box
+                  key={init.id}
+                  onClick={() => setSelectedRootId(init.id)}
+                  sx={{
+                    px: 2, py: 1.25, cursor: 'pointer',
+                    borderLeft: isActive ? '3px solid #6366f1' : '3px solid transparent',
+                    bgcolor: isActive ? '#f5f3ff' : 'transparent',
+                    borderBottom: '1px solid #f1f5f9',
+                    '&:hover': { bgcolor: isActive ? '#f5f3ff' : '#f8fafc' },
+                    display: 'flex', alignItems: 'flex-start', gap: 1,
+                  }}
+                >
+                  <Box sx={{ mt: 0.6, width: 7, height: 7, borderRadius: '50%', bgcolor: STATUS_CONFIG[init.status]?.dot || '#94a3b8', flexShrink: 0 }} />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={isActive ? 600 : 500} color={isActive ? '#4f46e5' : 'text.primary'} noWrap>
+                      {init.title}
+                    </Typography>
+                    <Box display="flex" alignItems="center" gap={0.75} mt={0.25}>
+                      <Box sx={{ width: 3, height: 10, bgcolor: PRIORITY_COLORS[init.priority] || '#94a3b8', borderRadius: 1 }} />
+                      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.68rem' }}>
+                        {init.priority?.charAt(0) + init.priority?.slice(1).toLowerCase()}
+                        {childCount > 0 && ` · ${childCount} child${childCount !== 1 ? 'ren' : ''}`}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+              );
+            })}
           </Box>
-        ))}
+        </Box>
+
+        {/* ── RIGHT PANEL ────────────────────────────────────────────────── */}
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Mini toolbar */}
+          <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+            <Box>
+              <Typography variant="subtitle1" fontWeight={700}>
+                {selectedRootId ? rootInitiatives.find(i => i.id === selectedRootId)?.title : 'All initiatives'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {selectedDisplayItems.length} item{selectedDisplayItems.length !== 1 ? 's' : ''} · drag to rearrange
+              </Typography>
+            </Box>
+            <Box display="flex" gap={1} alignItems="center">
+              <Tooltip title="Export as image">
+                <span>
+                  <IconButton
+                    onClick={e => setExportMenuAnchor(e.currentTarget)}
+                    disabled={exporting}
+                    size="small"
+                    sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+                  >
+                    {exporting ? <CircularProgress size={16} /> : <Download fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <MuiMenu
+                anchorEl={exportMenuAnchor}
+                open={Boolean(exportMenuAnchor)}
+                onClose={() => setExportMenuAnchor(null)}
+                PaperProps={{ sx: { borderRadius: 2, minWidth: 200, boxShadow: '0 4px 20px rgba(0,0,0,0.12)' } }}
+              >
+                <MuiMenuItem dense onClick={handleExportImage} sx={{ gap: 1.5 }}>
+                  <SelectAll sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  <Box>
+                    <Typography variant="body2" fontWeight={500}>Export all</Typography>
+                    <Typography variant="caption" color="text.secondary">Save entire mind map</Typography>
+                  </Box>
+                </MuiMenuItem>
+                <MuiMenuItem
+                  dense
+                  onClick={handleExportSelected}
+                  disabled={selectedNodeIds.length === 0}
+                  sx={{ gap: 1.5 }}
+                >
+                  <CropFree sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  <Box>
+                    <Typography variant="body2" fontWeight={500}>
+                      Export selected{selectedNodeIds.length > 0 ? ` (${selectedNodeIds.length})` : ''}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {selectedNodeIds.length === 0 ? 'Select nodes first' : 'Save selected nodes only'}
+                    </Typography>
+                  </Box>
+                </MuiMenuItem>
+              </MuiMenu>
+              <Tooltip title="Auto-arrange: clean up layout, keeping trees near their current positions">
+                <IconButton
+                  onClick={autoArrange}
+                  size="small"
+                  sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+                >
+                  <AutoFixHigh fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Refresh">
+                <IconButton
+                  onClick={() => dispatch(fetchAllInitiatives({ canvasId: activeCanvasId }))}
+                  size="small"
+                  sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
+                >
+                  <Refresh fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Button
+                variant="outlined"
+                startIcon={<ListIcon />}
+                onClick={() => navigate('/initiatives')}
+              >
+                List View
+              </Button>
+            </Box>
+          </Box>
+
+          {/* React Flow canvas */}
+          <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#f5f6fa' }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={NODE_TYPES}
+              onNodeDragStop={onNodeDragStop}
+              onNodeDoubleClick={onNodeDoubleClick}
+              onSelectionChange={({ nodes: sel }) => setSelectedNodeIds((sel || []).map(n => n.id))}
+              selectionOnDrag
+              panOnDrag={[1, 2]}
+              multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+              selectionKeyCode={null}
+              onMoveEnd={onMoveEnd}
+              minZoom={0.08}
+              maxZoom={2}
+              defaultEdgeOptions={{ type: 'smoothstep' }}
+            >
+              <Background variant="dots" color="#c7d2fe" gap={28} size={1.5} />
+              <Controls
+                style={{
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.1)',
+                  borderRadius: 10,
+                  border: '1px solid #e2e8f0',
+                  overflow: 'hidden',
+                }}
+              />
+              <MiniMap
+                nodeColor={(node) => STATUS_CONFIG[node.data?.initiative?.status]?.dot || '#94a3b8'}
+                maskColor="rgba(99,102,241,0.06)"
+                style={{ borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
+              />
+              {allItems.length === 0 && (
+                <Panel position="top-center">
+                  <Box sx={{ bgcolor: 'white', p: 3, borderRadius: 3, boxShadow: '0 4px 20px rgba(0,0,0,0.1)', textAlign: 'center', border: '1px solid #e2e8f0' }}>
+                    <Typography variant="body2" color="text.secondary" mb={1.5}>No initiatives yet.</Typography>
+                    <Button variant="contained" size="small" startIcon={<Add />} onClick={() => setCreateDialogOpen(true)}>
+                      Create First Initiative
+                    </Button>
+                  </Box>
+                </Panel>
+              )}
+              <Panel position="bottom-center">
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(6px)', border: '1px solid #e2e8f0', borderRadius: 6, px: 1.75, py: 0.5, display: 'flex', gap: 2 }}>
+                  <Typography variant="caption" color="text.disabled">Drag canvas to select · Shift+click to add · Double-click to open</Typography>
+                </Box>
+              </Panel>
+            </ReactFlow>
+          </Box>
+
+          {/* Legend */}
+          <Box
+            display="flex" gap={1} flexWrap="wrap" alignItems="center"
+            sx={{ px: 2, py: 0.75, bgcolor: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(8px)', borderTop: '1px solid #f1f5f9' }}
+          >
+            {Object.entries(STATUS_CONFIG).map(([status, cfg]) => (
+              <Box key={status} display="flex" alignItems="center" gap={0.5}>
+                <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: cfg.dot }} />
+                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{cfg.label}</Typography>
+              </Box>
+            ))}
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+            {Object.entries(PRIORITY_COLORS).map(([p, color]) => (
+              <Box key={p} display="flex" alignItems="center" gap={0.4}>
+                <Box sx={{ width: 3, height: 12, bgcolor: color, borderRadius: 1 }} />
+                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{p.charAt(0) + p.slice(1).toLowerCase()}</Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
       </Box>
 
       {/* Detail Drawer (full tabs: Overview, Links, Comments, Activity) */}

@@ -1,11 +1,10 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { randomUUID } from 'crypto';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const USER_SELECT = {
   id: true,

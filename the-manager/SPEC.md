@@ -16,8 +16,8 @@
 ### Backend
 - **Runtime:** Node.js (LTS version, 18.x or later)
 - **Framework:** Express.js
-- **Database:** PostgreSQL (primary) with option for MongoDB (flexibility for hierarchical data)
-- **ORM:** Prisma (for PostgreSQL) or Mongoose (for MongoDB)
+- **Database:** SQLite (single local file, zero server required)
+- **ORM:** Prisma (SQLite datasource — `file:./prisma/dev.db`)
 - **Authentication:** JWT (JSON Web Tokens)
 - **API Style:** RESTful API with GraphQL consideration for complex queries
 
@@ -783,6 +783,23 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 
 ---
 
-**Version:** 1.3  
+**Version:** 1.4  
 **Last Updated:** March 5, 2026  
 **Status:** Draft
+
+### Phase 11: SQLite Migration ✅ Implemented
+**Duration:** March 5, 2026
+
+Replaced PostgreSQL with a local SQLite file — no database server required.
+
+**What changed**
+- [x] `backend/prisma/schema.prisma` — datasource provider switched from `postgresql` to `sqlite`; `String[]` array fields changed to `String @default("[]")` (JSON text); `Json` fields changed to `String` (SQLite JSON1 emulation); `enum` blocks replaced with `String` fields with documentation comments
+- [x] `backend/src/lib/prisma.js` — new shared Prisma client with `$extends` that auto-parses JSON text to JS objects on reads and auto-stringifies JS objects to JSON text on writes; covers `User.preferences`, `Initiative.tags`, `Link.tags`, `ActivityLog.changes`, `BrainstormCanvas.nodes/edges`
+- [x] All 7 route files + `middleware/auth.js` — switched from `new PrismaClient()` per-file to importing the shared `prisma` from `../lib/prisma.js`
+- [x] `backend/.env` — `DATABASE_URL` changed to `"file:./prisma/dev.db"`
+- [x] `mode: 'insensitive'` removed from `contains` queries in `initiatives.js` and `notes.js` (SQLite LIKE is case-insensitive for ASCII by default)
+- [x] Old PostgreSQL migrations deleted; fresh migration `20260305154749_sqlite_init` applied
+- [x] SQLite database file created at `backend/prisma/dev.db`
+
+**Setup (after this change)**  
+No database server needed. Run `npx prisma migrate dev` once after cloning — it creates `prisma/dev.db` automatically. Delete `dev.db` to fully reset all data.
