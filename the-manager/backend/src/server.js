@@ -8,6 +8,7 @@ import canvasRoutes from './routes/canvases.js';
 import brainstormRoutes from './routes/brainstorm.js';
 import aiRoutes from './routes/ai.js';
 import notesRoutes from './routes/notes.js';
+import gmailRoutes from './routes/gmail.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -31,6 +32,7 @@ app.use('/api/canvases', canvasRoutes);
 app.use('/api/brainstorm', brainstormRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notes', notesRoutes);
+app.use('/api/gmail', gmailRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

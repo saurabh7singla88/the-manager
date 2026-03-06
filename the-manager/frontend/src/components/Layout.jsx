@@ -4,7 +4,7 @@ import {
   ListItemButton, ListItemIcon, ListItemText, IconButton,
   Avatar, Divider, Tooltip, AppBar, Toolbar, Container
 } from '@mui/material';
-import { Dashboard as DashboardIcon, List as ListIcon, Logout, Menu as MenuIcon, AccountTree, CheckBox as TasksIcon, People as PeopleIcon, Lightbulb as LightbulbIcon, NoteAlt } from '@mui/icons-material';
+import { Dashboard as DashboardIcon, List as ListIcon, Logout, Menu as MenuIcon, AccountTree, CheckBox as TasksIcon, People as PeopleIcon, Lightbulb as LightbulbIcon, NoteAlt, EventNote, Settings as SettingsIcon } from '@mui/icons-material';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { logout } from '../features/auth/authSlice';
@@ -32,8 +32,10 @@ export default function Layout() {
     { text: 'Mind Map',   icon: <AccountTree fontSize="small" />,     path: '/mindmap' },
     { text: 'Tasks',      icon: <TasksIcon fontSize="small" />,       path: '/tasks' },
     { text: 'Brainstorm', icon: <LightbulbIcon fontSize="small" />,   path: '/brainstorm' },
-    { text: 'Notes',      icon: <NoteAlt fontSize="small" />,         path: '/notes' },
-    { text: 'Users',      icon: <PeopleIcon fontSize="small" />,      path: '/users' },
+    { text: 'Notes',         icon: <NoteAlt fontSize="small" />,    path: '/notes' },
+    { text: 'Meeting Notes', icon: <EventNote fontSize="small" />,  path: '/meeting-notes' },
+    { text: 'Users',         icon: <PeopleIcon fontSize="small" />, path: '/users' },
+    { text: 'Setup',          icon: <SettingsIcon fontSize="small" />, path: '/setup' },
   ];
 
   const initials = user?.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';

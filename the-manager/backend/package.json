@@ -11,17 +11,24 @@
     "db:studio": "prisma studio",
     "db:generate": "prisma generate"
   },
-  "keywords": ["initiative", "tracker", "todo", "mindmap"],
+  "keywords": [
+    "initiative",
+    "tracker",
+    "todo",
+    "mindmap"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
     "@prisma/client": "^5.8.0",
-    "jsonwebtoken": "^9.0.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express-validator": "^7.0.1"
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "imapflow": "^1.2.12",
+    "jsonwebtoken": "^9.0.2",
+    "mailparser": "^3.9.3"
   },
   "devDependencies": {
     "prisma": "^5.8.0"

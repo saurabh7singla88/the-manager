@@ -38,6 +38,7 @@ model User {
   canvases Canvas[]
   brainstormCanvas BrainstormCanvas?
   notes Note[]
+  googleToken GoogleToken?
 
   @@map("users")
 }
@@ -223,4 +224,17 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+model GoogleToken {
+  userId       String   @id
+  accessToken  String
+  refreshToken String?
+  expiryDate   String?
+  scope        String?
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("google_tokens")
 }

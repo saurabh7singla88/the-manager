@@ -9,6 +9,8 @@ import Tasks from './pages/Tasks';
 import Users from './pages/Users';
 import Brainstorm from './pages/Brainstorm';
 import Notes from './pages/Notes';
+import MeetingNotes from './pages/MeetingNotes';
+import Setup from './pages/Setup';
 import Layout from './components/Layout';
 
 function App() {
@@ -26,7 +28,9 @@ function App() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/brainstorm" element={<Brainstorm />} />
         <Route path="/notes" element={<Notes />} />
+        <Route path="/meeting-notes" element={<MeetingNotes />} />
         <Route path="/users" element={<Users />} />
+        <Route path="/setup" element={<Setup />} />
       </Route>
     </Routes>
   );

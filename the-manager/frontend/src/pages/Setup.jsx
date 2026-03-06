@@ -1,0 +1,510 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Box, Typography, Button, TextField, Select, MenuItem,
+  FormControl, InputLabel, Divider, CircularProgress, Alert,
+  InputAdornment, IconButton, Chip, Paper, Stepper, Step,
+  StepLabel, StepContent, Link,
+} from '@mui/material';
+import {
+  SmartToy, Visibility, VisibilityOff, CheckCircle, Save,
+  Email, CheckCircleOutline, ErrorOutline, Launch, Label,
+} from '@mui/icons-material';
+import api from '../api/axios';
+
+// ─── shared data ──────────────────────────────────────────────────────────────
+const PROVIDERS = [
+  { value: 'ollama',            label: 'Ollama (local)',        icon: '🦙', desc: 'Free, runs locally. No API key needed.' },
+  { value: 'openai',            label: 'OpenAI / ChatGPT',      icon: '✨', desc: 'GPT-4o and friends. Requires API key.' },
+  { value: 'gemini',            label: 'Google Gemini',         icon: '♊', desc: 'Gemini 2.5 / 3.x. Requires API key.' },
+  { value: 'openai_compatible', label: 'OpenAI-compatible API', icon: '🔌', desc: 'LM Studio, Groq, Together AI, Mistral, etc.' },
+  { value: 'disabled',          label: 'Disabled',              icon: '🚫', desc: 'Structural scoring only — no LLM analysis.' },
+];
+
+const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'];
+const GEMINI_MODELS = [
+  'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro',
+  'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro',
+  'gemini-2.5-flash-preview-04-17', 'gemini-2.5-pro-preview-03-25',
+  'gemini-3-flash-preview',
+];
+const OLLAMA_DEFAULTS = ['llama3.1:latest', 'llama3.2:latest', 'mistral:latest', 'phi3:latest', 'gemma2:latest'];
+
+// ─── Section wrapper ──────────────────────────────────────────────────────────
+function Section({ icon, title, subtitle, children }) {
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden', mb: 3,
+      }}
+    >
+      <Box sx={{ px: 3, py: 2.5, borderBottom: '1px solid #f1f5f9', bgcolor: '#fafafa' }}>
+        <Box display="flex" alignItems="center" gap={1.25}>
+          {icon}
+          <Box>
+            <Typography variant="subtitle1" fontWeight={700} lineHeight={1.2}>{title}</Typography>
+            {subtitle && <Typography variant="caption" color="text.secondary">{subtitle}</Typography>}
+          </Box>
+        </Box>
+      </Box>
+      <Box sx={{ px: 3, py: 3 }}>{children}</Box>
+    </Paper>
+  );
+}
+
+// ─── AI Section ───────────────────────────────────────────────────────────────
+function AISection() {
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [saved, setSaved]       = useState(false);
+  const [error, setError]       = useState('');
+  const [showOAIKey, setShowOAIKey]   = useState(false);
+  const [showGemKey, setShowGemKey]   = useState(false);
+  const [keyStatus, setKeyStatus]     = useState({ openai: false, gemini: false });
+
+  const [form, setForm] = useState({
+    provider: 'ollama',
+    ollamaBaseUrl: 'http://localhost:11434',
+    ollamaModel: 'llama3.1:latest',
+    openaiBaseUrl: 'https://api.openai.com',
+    openaiModel: 'gpt-4o-mini',
+    openaiApiKey: '',
+    geminiModel: 'gemini-2.5-flash-preview-04-17',
+    geminiApiKey: '',
+  });
+
+  useEffect(() => {
+    api.get('/ai/settings')
+      .then(r => {
+        const d = r.data;
+        setForm(f => ({
+          ...f,
+          provider:      d.provider      || 'ollama',
+          ollamaBaseUrl: d.ollamaBaseUrl  || 'http://localhost:11434',
+          ollamaModel:   d.ollamaModel    || 'llama3.1:latest',
+          openaiBaseUrl: d.openaiBaseUrl  || 'https://api.openai.com',
+          openaiModel:   d.openaiModel    || 'gpt-4o-mini',
+          geminiModel:   d.geminiModel    || 'gemini-2.5-flash-preview-04-17',
+        }));
+        setKeyStatus({ openai: !!d.openaiApiKeySet, gemini: !!d.geminiApiKeySet });
+      })
+      .catch(() => setError('Failed to load AI settings.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = f => e => { setForm(p => ({ ...p, [f]: e.target.value })); setSaved(false); };
+
+  const save = async () => {
+    setSaving(true); setError('');
+    try {
+      await api.put('/ai/settings', form);
+      setSaved(true);
+      setKeyStatus({
+        openai: form.openaiApiKey ? true : keyStatus.openai,
+        gemini: form.geminiApiKey ? true : keyStatus.gemini,
+      });
+      setTimeout(() => setSaved(false), 3000);
+    } catch { setError('Failed to save. Please try again.'); }
+    finally { setSaving(false); }
+  };
+
+  const p = form.provider;
+  const providerMeta = PROVIDERS.find(pr => pr.value === p);
+
+  if (loading) return <Box display="flex" justifyContent="center" py={4}><CircularProgress size={28} /></Box>;
+
+  return (
+    <Box display="flex" flexDirection="column" gap={2.5}>
+      {/* Provider grid */}
+      <Box>
+        <Typography variant="body2" fontWeight={600} color="text.secondary" mb={1.25}>
+          AI Provider
+        </Typography>
+        <Box display="flex" flexWrap="wrap" gap={1}>
+          {PROVIDERS.map(pr => (
+            <Box
+              key={pr.value}
+              onClick={() => { setForm(f => ({ ...f, provider: pr.value })); setSaved(false); }}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 1, px: 1.75, py: 1.25,
+                border: `2px solid ${p === pr.value ? '#6366f1' : '#e2e8f0'}`,
+                borderRadius: 2.5, cursor: 'pointer', minWidth: 160,
+                bgcolor: p === pr.value ? '#f0f0ff' : '#fff',
+                transition: 'all 0.15s',
+                '&:hover': { borderColor: '#6366f1', bgcolor: '#f5f3ff' },
+              }}
+            >
+              <Typography sx={{ fontSize: '1.2rem', lineHeight: 1 }}>{pr.icon}</Typography>
+              <Box>
+                <Typography variant="body2" fontWeight={p === pr.value ? 700 : 500} fontSize="0.82rem">
+                  {pr.label}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" fontSize="0.7rem" display="block">
+                  {pr.desc}
+                </Typography>
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+
+      <Divider />
+
+      {/* Provider-specific fields */}
+      {p === 'ollama' && (
+        <Box display="flex" flexDirection="column" gap={2}>
+          <Typography variant="body2" color="text.secondary">
+            Ollama runs locally — no API key needed. Install from{' '}
+            <Link href="https://ollama.com" target="_blank" rel="noopener">ollama.com</Link>
+            , then pull a model: <code>ollama pull llama3.1</code>
+          </Typography>
+          <Box display="flex" gap={2}>
+            <TextField label="Base URL" value={form.ollamaBaseUrl} onChange={set('ollamaBaseUrl')}
+              size="small" sx={{ flex: 2 }} helperText="Default: http://localhost:11434" />
+            <TextField label="Model" value={form.ollamaModel} onChange={set('ollamaModel')}
+              size="small" sx={{ flex: 2 }} helperText={`e.g. ${OLLAMA_DEFAULTS.slice(0, 3).join(', ')}`} />
+          </Box>
+        </Box>
+      )}
+
+      {p === 'openai' && (
+        <Box display="flex" flexDirection="column" gap={2}>
+          <Typography variant="body2" color="text.secondary">
+            Get your API key at{' '}
+            <Link href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
+              platform.openai.com/api-keys <Launch sx={{ fontSize: 12, verticalAlign: 'middle' }} />
+            </Link>
+          </Typography>
+          <Box display="flex" gap={2}>
+            <TextField
+              label="API Key" type={showOAIKey ? 'text' : 'password'}
+              value={form.openaiApiKey} onChange={set('openaiApiKey')}
+              size="small" sx={{ flex: 3 }}
+              placeholder={keyStatus.openai ? 'Paste new key to replace…' : 'sk-…'}
+              helperText={keyStatus.openai ? '✓ Key is saved' : 'Required'}
+              InputProps={{ endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setShowOAIKey(v => !v)}>
+                    {showOAIKey ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              )}}
+            />
+            <FormControl size="small" sx={{ flex: 2 }}>
+              <InputLabel>Model</InputLabel>
+              <Select value={form.openaiModel} label="Model" onChange={set('openaiModel')}>
+                {OPENAI_MODELS.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+              </Select>
+            </FormControl>
+          </Box>
+        </Box>
+      )}
+
+      {p === 'openai_compatible' && (
+        <Box display="flex" flexDirection="column" gap={2}>
+          <Typography variant="body2" color="text.secondary">
+            Works with LM Studio, Groq, Together AI, Mistral, or any OpenAI-compatible endpoint.
+          </Typography>
+          <TextField label="Base URL" value={form.openaiBaseUrl} onChange={set('openaiBaseUrl')}
+            size="small" fullWidth
+            helperText="e.g. http://localhost:1234 (LM Studio), https://api.groq.com, https://api.together.xyz" />
+          <Box display="flex" gap={2}>
+            <TextField
+              label="API Key" type={showOAIKey ? 'text' : 'password'}
+              value={form.openaiApiKey} onChange={set('openaiApiKey')}
+              size="small" sx={{ flex: 2 }}
+              placeholder={keyStatus.openai ? 'Paste new key to replace…' : 'API key or token'}
+              helperText={keyStatus.openai ? '✓ Key is saved' : 'Leave blank if auth is not required'}
+              InputProps={{ endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setShowOAIKey(v => !v)}>
+                    {showOAIKey ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              )}}
+            />
+            <TextField label="Model name" value={form.openaiModel} onChange={set('openaiModel')}
+              size="small" sx={{ flex: 2 }} helperText="As recognised by your endpoint" />
+          </Box>
+        </Box>
+      )}
+
+      {p === 'gemini' && (
+        <Box display="flex" flexDirection="column" gap={2}>
+          <Typography variant="body2" color="text.secondary">
+            Get a free API key at{' '}
+            <Link href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+              aistudio.google.com/apikey <Launch sx={{ fontSize: 12, verticalAlign: 'middle' }} />
+            </Link>
+          </Typography>
+          <Box display="flex" gap={2}>
+            <TextField
+              label="API Key" type={showGemKey ? 'text' : 'password'}
+              value={form.geminiApiKey} onChange={set('geminiApiKey')}
+              size="small" sx={{ flex: 3 }}
+              placeholder={keyStatus.gemini ? 'Paste new key to replace…' : 'AIza…'}
+              helperText={keyStatus.gemini ? '✓ Key is saved' : 'Required'}
+              InputProps={{ endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setShowGemKey(v => !v)}>
+                    {showGemKey ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              )}}
+            />
+            <FormControl size="small" sx={{ flex: 2 }}>
+              <InputLabel>Model</InputLabel>
+              <Select value={form.geminiModel} label="Model" onChange={set('geminiModel')}>
+                {GEMINI_MODELS.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+              </Select>
+            </FormControl>
+          </Box>
+        </Box>
+      )}
+
+      {p === 'disabled' && (
+        <Alert severity="info" sx={{ borderRadius: 2 }}>
+          LLM analysis is disabled. Initiatives will still be ranked using structural signals —
+          priority, due dates, staleness, blocked sub-items, etc.
+        </Alert>
+      )}
+
+      {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
+      {saved  && <Alert severity="success" icon={<CheckCircle />} sx={{ borderRadius: 2 }}>Settings saved!</Alert>}
+
+      <Box display="flex" justifyContent="flex-end">
+        <Button
+          variant="contained" onClick={save} disabled={saving || p === 'disabled'}
+          startIcon={saving ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <Save fontSize="small" />}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, px: 3 }}
+        >
+          {saving ? 'Saving…' : 'Save AI Settings'}
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
+// ─── Gmail Section ────────────────────────────────────────────────────────────
+function GmailSection() {
+  const [testing, setTesting]     = useState(false);
+  const [testResult, setTestResult] = useState(null); // null | { ok, user?, error? }
+  const [defaultLabel, setDefaultLabel] = useState('Gemini Notes');
+
+  const testConnection = useCallback(async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await api.get('/gmail/test-config');
+      setTestResult({ ok: true, user: r.data.user, encrypted: r.data.encrypted });
+    } catch (e) {
+      setTestResult({ ok: false, error: e.response?.data?.error || e.message });
+    } finally {
+      setTesting(false);
+    }
+  }, []);
+
+  return (
+    <Box display="flex" flexDirection="column" gap={3}>
+      {/* Overview */}
+      <Alert severity="info" sx={{ borderRadius: 2 }}>
+        Gmail integration fetches emails from a label (e.g. <strong>Gemini Notes</strong>) and shows
+        them in the <strong>Meeting Notes</strong> page. It uses IMAP with a Google App Password —
+        no OAuth flow required.
+      </Alert>
+
+      {/* Step-by-step */}
+      <Stepper orientation="vertical" nonLinear>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">Enable 2-Step Verification on your Google account</Typography>
+          </StepLabel>
+          <StepContent>
+            <Typography variant="body2" color="text.secondary" mb={1}>
+              Required before you can generate App Passwords.
+            </Typography>
+            <Button
+              size="small" variant="outlined" endIcon={<Launch fontSize="small" />}
+              href="https://myaccount.google.com/security" target="_blank" rel="noopener"
+              sx={{ borderRadius: 2, textTransform: 'none', fontSize: '0.8rem' }}
+            >
+              myaccount.google.com/security
+            </Button>
+          </StepContent>
+        </Step>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">Generate an App Password</Typography>
+          </StepLabel>
+          <StepContent>
+            <Typography variant="body2" color="text.secondary" mb={1}>
+              Visit App Passwords, create a new one (name it "The Manager"), and copy the 16-character password.
+            </Typography>
+            <Button
+              size="small" variant="outlined" endIcon={<Launch fontSize="small" />}
+              href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"
+              sx={{ borderRadius: 2, textTransform: 'none', fontSize: '0.8rem' }}
+            >
+              myaccount.google.com/apppasswords
+            </Button>
+          </StepContent>
+        </Step>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">Add credentials to <code>backend/.env</code></Typography>
+          </StepLabel>
+          <StepContent>
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e293b', color: '#e2e8f0', borderRadius: 2,
+                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 1,
+              }}
+            >
+{`GMAIL_USER=you@gmail.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`}
+            </Box>
+          </StepContent>
+        </Step>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">
+              Encrypt the password <Chip label="Recommended" size="small" sx={{ ml: 1, bgcolor: '#f0fdf4', color: '#166534', fontWeight: 700, fontSize: '0.65rem' }} />
+            </Typography>
+          </StepLabel>
+          <StepContent>
+            <Typography variant="body2" color="text.secondary" mb={1.5}>
+              Run this once from the <code>backend/</code> folder. It generates an AES-256 key, encrypts
+              your password in-place, and writes both back to <code>.env</code> — no copy-pasting needed.
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e293b', color: '#86efac', borderRadius: 2,
+                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 1,
+              }}
+            >
+{`cd backend
+node setup-env.js`}
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              After running, your <code>.env</code> will have{' '}
+              <code>TOKEN_ENCRYPTION_KEY=…</code> and{' '}
+              <code>GMAIL_APP_PASSWORD=enc:…</code>. The plaintext is never stored.
+            </Typography>
+          </StepContent>
+        </Step>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">Restart the backend and test</Typography>
+          </StepLabel>
+          <StepContent>
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: '#1e293b', color: '#e2e8f0', borderRadius: 2,
+                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 2,
+              }}
+            >
+{`cd backend && npm run dev`}
+            </Box>
+
+            <Button
+              variant="outlined" onClick={testConnection} disabled={testing}
+              startIcon={testing
+                ? <CircularProgress size={14} />
+                : testResult?.ok
+                  ? <CheckCircleOutline sx={{ color: 'success.main' }} />
+                  : <Email />
+              }
+              sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+            >
+              {testing ? 'Testing…' : 'Test Gmail Connection'}
+            </Button>
+
+            {testResult && (
+              <Alert
+                severity={testResult.ok ? 'success' : 'error'}
+                icon={testResult.ok ? <CheckCircleOutline /> : <ErrorOutline />}
+                sx={{ mt: 1.5, borderRadius: 2 }}
+              >
+                {testResult.ok
+                  ? <>Connected as <strong>{testResult.user}</strong>{testResult.encrypted ? ' · password encrypted ✓' : ' · password is plaintext (run setup-env.js to encrypt)'}</>
+                  : testResult.error
+                }
+              </Alert>
+            )}
+          </StepContent>
+        </Step>
+
+        <Step active>
+          <StepLabel>
+            <Typography fontWeight={600} fontSize="0.9rem">Go to Meeting Notes</Typography>
+          </StepLabel>
+          <StepContent>
+            <Typography variant="body2" color="text.secondary" mb={1.5}>
+              Navigate to <strong>Meeting Notes</strong> in the sidebar. The default label is{' '}
+              <strong>Gemini Notes</strong> — change it to whatever Gmail label you use, or type a custom one.
+            </Typography>
+            <Box display="flex" alignItems="center" gap={1.5}>
+              <TextField
+                size="small"
+                label="Default label"
+                value={defaultLabel}
+                onChange={e => setDefaultLabel(e.target.value)}
+                sx={{ width: 220, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+                InputProps={{
+                  startAdornment: <InputAdornment position="start"><Label sx={{ fontSize: 16, color: '#94a3b8' }} /></InputAdornment>,
+                }}
+              />
+              <Typography variant="caption" color="text.secondary">
+                e.g. <code>Gemini Notes</code>, <code>INBOX</code>, or any custom Gmail label
+              </Typography>
+            </Box>
+          </StepContent>
+        </Step>
+
+      </Stepper>
+    </Box>
+  );
+}
+
+// ─── Main Setup page ──────────────────────────────────────────────────────────
+export default function Setup() {
+  return (
+    <Box sx={{ maxWidth: 860, mx: 'auto', px: { xs: 2, sm: 4 }, py: 4 }}>
+      {/* Page title */}
+      <Box mb={4}>
+        <Typography variant="h4" fontWeight={800} color="#1e293b" mb={0.5}>
+          Setup
+        </Typography>
+        <Typography variant="body1" color="text.secondary">
+          Configure AI providers and integrations. Settings are stored in the database and take effect immediately.
+        </Typography>
+      </Box>
+
+      {/* AI */}
+      <Section
+        icon={<SmartToy sx={{ color: '#7c3aed', fontSize: 22 }} />}
+        title="AI Model"
+        subtitle="Powers priority suggestions and description analysis on your initiatives"
+      >
+        <AISection />
+      </Section>
+
+      {/* Gmail */}
+      <Section
+        icon={<Email sx={{ color: '#ea4335', fontSize: 22 }} />}
+        title="Gmail Integration"
+        subtitle="Fetch meeting notes from a Gmail label and display them in the Meeting Notes page"
+      >
+        <GmailSection />
+      </Section>
+    </Box>
+  );
+}

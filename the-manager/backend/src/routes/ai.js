@@ -70,10 +70,28 @@ async function callOpenAI(settings, systemPrompt, userPrompt) {
 }
 
 // ─── Provider: Google Gemini ──────────────────────────────────────────────────
-async function callGemini(settings, systemPrompt, userPrompt) {
+async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = null) {
   if (!settings.ai_gemini_api_key) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+  const defaultSchema = {
+    type: 'object',
+    properties: {
+      results: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            urgency: { type: 'number' },
+            reason: { type: 'string' },
+          },
+          required: ['id', 'urgency', 'reason'],
+        },
+      },
+    },
+    required: ['results'],
+  };
   try {
     const model = settings.ai_gemini_model || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.ai_gemini_api_key}`;
@@ -84,24 +102,7 @@ async function callGemini(settings, systemPrompt, userPrompt) {
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
         generationConfig: {
           responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'object',
-            properties: {
-              results: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    id: { type: 'string' },
-                    urgency: { type: 'number' },
-                    reason: { type: 'string' },
-                  },
-                  required: ['id', 'urgency', 'reason'],
-                },
-              },
-            },
-            required: ['results'],
-          },
+          responseSchema: schemaOverride || defaultSchema,
           temperature: 0.1,
           maxOutputTokens: 4096,
         },
@@ -115,20 +116,10 @@ async function callGemini(settings, systemPrompt, userPrompt) {
       return null;
     }
 
-    const finishReason = data.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== 'STOP') {
-      console.warn('Gemini non-STOP finish reason:', finishReason);
-    }
-
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!text) {
-      console.error('Gemini returned no text. Full response:', JSON.stringify(data, null, 2));
-      return null;
-    }
-    console.log('Gemini raw text:', text.slice(0, 300));
+    if (!text) return null;
     return text;
-  } catch (e) {
-    console.error('Gemini call failed:', e.message);
+  } catch {
     return null;
   } finally { clearTimeout(timer); }
 }
@@ -169,7 +160,7 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
   if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
   else if (provider === 'openai') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
   else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
-  else if (provider === 'gemini') rawText = await callGemini(settings, systemPrompt, userPrompt);
+  else if (provider === 'gemini') rawText = await callGemini(settings, systemPrompt, userPrompt, null);
 
   if (!rawText) return { map: {}, provider };
 
@@ -433,6 +424,89 @@ router.get('/suggestions', async (req, res, next) => {
       llmProvider: llmUsed ? llmProvider : null,
       generatedAt: new Date().toISOString(),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Action items extractor ──────────────────────────────────────────────────
+const ACTION_ITEMS_GEMINI_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          text:     { type: 'string' },
+          assignee: { type: 'string' },
+          isForMe:  { type: 'boolean' },
+        },
+        required: ['text', 'isForMe'],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+async function extractActionItems(emailText, subject, userName, settings) {
+  const provider = settings.ai_provider || 'ollama';
+  if (provider === 'disabled') return { items: [], provider: 'disabled' };
+
+  const body = (emailText || '').slice(0, 6000);
+  const systemPrompt = `You are a meeting notes assistant. Extract all action items from the email below.
+For each action item:
+- Write the task clearly and concisely
+- Set "assignee" to the person's name if mentioned, or "" if unclear
+- Set "isForMe" to true if the item is assigned to or most likely the responsibility of "${userName}", otherwise false
+
+Return ONLY a valid JSON object with key "items" containing an array.
+Format: { "items": [ { "text": "...", "assignee": "...", "isForMe": true/false } ] }`;
+
+  const userPrompt = `Subject: ${subject || '(no subject)'}
+
+${body}`;
+
+  let rawText = null;
+  if (provider === 'ollama')            rawText = await callOllama(settings, systemPrompt, userPrompt);
+  else if (provider === 'openai')       rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+  else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+  else if (provider === 'gemini')       rawText = await callGemini(settings, systemPrompt, userPrompt, ACTION_ITEMS_GEMINI_SCHEMA);
+
+  if (!rawText) return { items: [], provider };
+
+  try {
+    const clean = rawText.replace(/^```(?:json)?|```$/gm, '').trim();
+    const parsed = JSON.parse(clean);
+    const arr = Array.isArray(parsed) ? parsed
+      : Array.isArray(parsed.items) ? parsed.items
+      : Array.isArray(parsed.results) ? parsed.results
+      : [];
+    return {
+      items: arr.map(a => ({
+        text:     (a.text || a.action || a.task || '').trim(),
+        assignee: (a.assignee || a.owner || '').trim(),
+        isForMe:  Boolean(a.isForMe ?? a.is_for_me ?? false),
+      })).filter(a => a.text.length > 0),
+      provider,
+    };
+  } catch {
+    return { items: [], provider };
+  }
+}
+
+// POST /api/ai/action-items
+router.post('/action-items', async (req, res, next) => {
+  try {
+    const { subject, text, userName } = req.body;
+    if (!text && !subject) return res.status(400).json({ error: 'text or subject required' });
+
+    const settings = await loadAISettings();
+    const { items, provider } = await extractActionItems(
+      text, subject, userName || req.user?.name || 'me', settings,
+    );
+
+    return res.json({ items, provider });
   } catch (err) {
     next(err);
   }
