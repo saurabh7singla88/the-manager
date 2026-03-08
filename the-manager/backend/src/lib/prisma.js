@@ -14,8 +14,9 @@
  *   BrainstormCanvas.edges (any[])
  */
 
-import { PrismaClient } from '@prisma/client';
-
+// Use default import for CJS/ESM interop compatibility (required in Electron packaged builds)
+import _prismaClient from '@prisma/client';
+const { PrismaClient } = _prismaClient;
 const parse = (val, fallback = null) => {
   if (val === null || val === undefined) return fallback;
   if (typeof val !== 'string') return val;

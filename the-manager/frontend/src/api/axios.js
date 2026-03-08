@@ -28,7 +28,8 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Use hash-compatible redirect (works with both BrowserRouter and HashRouter / Electron file://)
+      window.location.hash = '/login';
     }
     return Promise.reject(error);
   }

@@ -1,6 +1,9 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
+import { HashRouter, BrowserRouter } from 'react-router-dom'
+
+// Use HashRouter when running in Electron (file:// protocol doesn't support BrowserRouter)
+const Router = window.electronAPI?.isElectron ? HashRouter : BrowserRouter;
 import { CssBaseline, ThemeProvider } from '@mui/material'
 import { Provider } from 'react-redux'
 import { store } from './store'
@@ -11,12 +14,12 @@ import './index.css'
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <Provider store={store}>
-      <BrowserRouter>
+      <Router>
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <App />
         </ThemeProvider>
-      </BrowserRouter>
+      </Router>
     </Provider>
   </React.StrictMode>,
 )

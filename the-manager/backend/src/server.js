@@ -17,8 +17,16 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5173'];
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (Electron file:// sends Origin: null, or same-origin server calls)
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -42,7 +50,19 @@ app.get('/api/health', (req, res) => {
 // Error handling
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Export for Electron (starts the server and resolves when listening)
+export function startServer() {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      resolve(server);
+    });
+    server.on('error', reject);
+  });
+}
+
+// Auto-start when run directly (not imported by Electron)
+if (process.env.ELECTRON !== 'true') {
+  startServer();
+}
