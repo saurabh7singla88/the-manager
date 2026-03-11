@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   Add, Delete, Lock, LockOpen, LockOutlined, Search, Clear,
-  NoteAlt, CheckCircle,
+  NoteAlt, CheckCircle, ChevronRight, ExpandMore, SubdirectoryArrowRight,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import api from '../api/axios';
@@ -23,7 +23,33 @@ function timeAgo(iso) {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return format(d, 'MMM d');
 }
+// Build a forest (array of root nodes) from a flat list; each node gets a .children[] array
+function buildTree(flatNotes) {
+  const map = {};
+  flatNotes.forEach(n => (map[n.id] = { ...n, children: [] }));
+  const roots = [];
+  flatNotes.forEach(n => {
+    if (n.parentId && map[n.parentId]) {
+      map[n.parentId].children.push(map[n.id]);
+    } else {
+      roots.push(map[n.id]);
+    }
+  });
+  return roots;
+}
 
+// Walk up the tree and collect all ancestor IDs for a given note
+function getAncestorIds(noteId, flatNotes) {
+  const map = {};
+  flatNotes.forEach(n => (map[n.id] = n));
+  const ids = [];
+  let cur = map[noteId];
+  while (cur?.parentId && map[cur.parentId]) {
+    ids.push(cur.parentId);
+    cur = map[cur.parentId];
+  }
+  return ids;
+}
 // ── Global password management dialog ────────────────────────────────────────
 // Handles: set / change / remove
 function PasswordMgmtDialog({ open, hasPassword, onClose, onSuccess }) {
@@ -161,6 +187,93 @@ function UnlockScreen({ onUnlocked }) {
   );
 }
 
+// ── NoteTreeItem — renders one node and its children recursively ───────────────
+function NoteTreeItem({ note, depth, selectedId, onSelect, onAddChild, expandedIds, onToggle, canvases }) {
+  const isExpanded = expandedIds.has(note.id);
+  const hasChildren = note.children?.length > 0;
+  const active = selectedId === note.id;
+  const canvas = depth === 0 ? canvases.find(c => c.id === note.canvasId) : null;
+
+  return (
+    <>
+      <Box
+        onClick={() => onSelect(note)}
+        sx={{
+          display: 'flex', alignItems: 'center', gap: 0.5,
+          pl: `${6 + depth * 14}px`, pr: 0.5,
+          py: 0.85, cursor: 'pointer',
+          borderLeft: '3px solid',
+          borderLeftColor: active ? '#6366f1' : 'transparent',
+          bgcolor: active ? '#f5f3ff' : 'transparent',
+          borderBottom: '1px solid #f1f5f9',
+          '&:hover': { bgcolor: active ? '#f5f3ff' : '#f8fafc' },
+          '&:hover .note-add-btn': { opacity: 1 },
+        }}
+      >
+        {/* Expand/collapse toggle — always reserves 18 px */}
+        <Box sx={{ width: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {hasChildren ? (
+            <IconButton size="small" onClick={e => { e.stopPropagation(); onToggle(note.id); }}
+              sx={{ p: 0, color: 'text.secondary' }}>
+              {isExpanded ? <ExpandMore sx={{ fontSize: 15 }} /> : <ChevronRight sx={{ fontSize: 15 }} />}
+            </IconButton>
+          ) : depth > 0 ? (
+            <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#d1d5db', mx: 'auto' }} />
+          ) : null}
+        </Box>
+
+        {/* Title + meta */}
+        <Box sx={{ flex: 1, overflow: 'hidden', pl: 0.25 }}>
+          <Typography
+            variant="body2"
+            fontWeight={active ? 700 : depth === 0 ? 600 : 500}
+            sx={{
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              color: active ? '#4f46e5' : 'text.primary',
+              fontSize: depth === 0 ? '0.875rem' : `${Math.max(0.78, 0.875 - depth * 0.025)}rem`,
+              lineHeight: 1.4,
+            }}
+          >
+            {note.title}
+          </Typography>
+          {depth === 0 && (
+            <Box display="flex" alignItems="center" gap={0.75} mt={0.15} flexWrap="wrap">
+              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.65rem' }}>
+                {timeAgo(note.updatedAt)}
+              </Typography>
+              {canvas && (
+                <Chip label={canvas.name} size="small"
+                  sx={{ height: 14, fontSize: '0.6rem', bgcolor: canvas.color + '22', color: canvas.color, border: 'none', fontWeight: 600 }} />
+              )}
+            </Box>
+          )}
+        </Box>
+
+        {/* Add-child button — revealed on hover */}
+        <Tooltip title="Add child note" placement="right">
+          <IconButton
+            className="note-add-btn"
+            size="small"
+            onClick={e => { e.stopPropagation(); onAddChild(note.id); }}
+            sx={{ opacity: 0, transition: 'opacity 0.15s', p: 0.3, color: '#94a3b8', flexShrink: 0 }}
+          >
+            <Add sx={{ fontSize: 13 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* Recurse into children */}
+      {isExpanded && hasChildren && note.children.map(child => (
+        <NoteTreeItem
+          key={child.id} note={child} depth={depth + 1}
+          selectedId={selectedId} onSelect={onSelect} onAddChild={onAddChild}
+          expandedIds={expandedIds} onToggle={onToggle} canvases={canvases}
+        />
+      ))}
+    </>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Notes() {
   const dispatch = useDispatch();
@@ -174,14 +287,14 @@ export default function Notes() {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pwMgmtOpen, setPwMgmtOpen] = useState(false);
 
-  // List state
-  const [notes, setNotes] = useState([]);
+  // Flat list of all user notes (includes parentId)
+  const [allNotes, setAllNotes] = useState([]);
   const [listLoading, setListLoading] = useState(true);
   const [search, setSearch] = useState('');
   const searchTimer = useRef(null);
 
-  // Per-canvas note counts
-  const [noteCounts, setNoteCounts] = useState({});
+  // Tree expand/collapse state
+  const [expandedIds, setExpandedIds] = useState(new Set());
 
   // Selected / editor state
   const [selectedId, setSelectedId] = useState(null);
@@ -189,13 +302,11 @@ export default function Notes() {
   const [saveState, setSaveState] = useState('saved');
   const saveTimer = useRef(null);
 
-  // Delete confirm
+  // Delete confirm / creating
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-
-  // Creating
   const [creating, setCreating] = useState(false);
 
-  // ── Load settings on mount ──────────────────────────────────────────────────
+  // ── Load settings ──────────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchCanvases());
     api.get('/notes/settings').then(r => {
@@ -204,15 +315,14 @@ export default function Notes() {
     }).catch(console.error);
   }, [dispatch]);
 
-  // ── Fetch notes list ────────────────────────────────────────────────────────
-  const fetchNotes = useCallback(async (s = '', canvasId = undefined) => {
+  // ── Fetch ALL notes flat (canvas filtering is client-side) ─────────────────
+  const fetchNotes = useCallback(async (s = '') => {
     setListLoading(true);
     try {
       const params = {};
       if (s) params.search = s;
-      if (canvasId) params.canvasId = canvasId;
       const r = await api.get('/notes', { params });
-      setNotes(r.data);
+      setAllNotes(r.data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -220,45 +330,90 @@ export default function Notes() {
     }
   }, []);
 
-  const refreshCounts = useCallback(async () => {
-    try {
-      const r = await api.get('/notes');
-      const map = {};
-      r.data.forEach(n => { if (n.canvasId) map[n.canvasId] = (map[n.canvasId] || 0) + 1; });
-      setNoteCounts(map);
-    } catch (e) { /* silent */ }
-  }, []);
-
   useEffect(() => {
-    if (isUnlocked) { fetchNotes(search, activeCanvasId); refreshCounts(); }
-  }, [activeCanvasId, isUnlocked]); // eslint-disable-line
+    if (isUnlocked) fetchNotes();
+  }, [isUnlocked]); // eslint-disable-line
 
   useEffect(() => {
     if (!isUnlocked) return;
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => fetchNotes(search, activeCanvasId), 300);
+    searchTimer.current = setTimeout(() => fetchNotes(search), 300);
   }, [search]); // eslint-disable-line
 
-  // ── Open note ───────────────────────────────────────────────────────────────
+  // ── Derived data ───────────────────────────────────────────────────────────
+  // Forest of root nodes, filtered by active canvas (canvas filter on roots only)
+  const visibleTree = useMemo(() => {
+    if (search) return [];
+    const forest = buildTree(allNotes);
+    if (!activeCanvasId) return forest;
+    return forest.filter(root => root.canvasId === activeCanvasId);
+  }, [allNotes, activeCanvasId, search]);
+
+  // Flat search results across all canvases
+  const flatSearchResults = useMemo(() => {
+    if (!search) return [];
+    return allNotes.filter(n => n.title.toLowerCase().includes(search.toLowerCase()));
+  }, [allNotes, search]);
+
+  // Note counts per canvas — root notes only (for CanvasSelector badges)
+  const noteCounts = useMemo(() => {
+    const map = {};
+    allNotes.filter(n => !n.parentId).forEach(n => {
+      if (n.canvasId) map[n.canvasId] = (map[n.canvasId] || 0) + 1;
+    });
+    return map;
+  }, [allNotes]);
+
+  // ── Expand helpers ─────────────────────────────────────────────────────────
+  const expandAncestors = useCallback((noteId, flat) => {
+    const ids = getAncestorIds(noteId, flat);
+    if (!ids.length) return;
+    setExpandedIds(prev => { const s = new Set(prev); ids.forEach(id => s.add(id)); return s; });
+  }, []);
+
+  const toggleExpand = useCallback((id) => {
+    setExpandedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  }, []);
+
+  // ── Open note ──────────────────────────────────────────────────────────────
   const openNote = useCallback(async (note) => {
     setSelectedId(note.id);
     setSaveState('saved');
+    expandAncestors(note.id, allNotes);
     try {
       const r = await api.get(`/notes/${note.id}`);
       setEditorNote(r.data);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
+    } catch (e) { console.error(e); }
+  }, [allNotes, expandAncestors]);
 
-  // ── Create note ─────────────────────────────────────────────────────────────
-  const handleCreate = async () => {
+  // ── Create note (root when parentId=null, child otherwise) ─────────────────
+  const handleCreate = useCallback(async (parentId = null) => {
     setCreating(true);
     try {
-      const r = await api.post('/notes', { title: 'Untitled Note', content: '', canvasId: activeCanvasId || null });
+      // Child notes inherit their root ancestor's canvasId
+      let canvasId = activeCanvasId || null;
+      if (parentId) {
+        const map = {};
+        allNotes.forEach(n => (map[n.id] = n));
+        let cur = map[parentId];
+        while (cur?.parentId && map[cur.parentId]) cur = map[cur.parentId];
+        canvasId = cur?.canvasId || null;
+      }
+
+      const r = await api.post('/notes', { title: 'Untitled Note', content: '', parentId: parentId || null, canvasId });
       const newNote = r.data;
-      setNotes(prev => [newNote, ...prev]);
-      refreshCounts();
+      setAllNotes(prev => [newNote, ...prev]);
+
+      // Auto-expand parent + all its ancestors
+      if (parentId) {
+        setExpandedIds(prev => {
+          const s = new Set(prev);
+          s.add(parentId);
+          getAncestorIds(parentId, allNotes).forEach(id => s.add(id));
+          return s;
+        });
+      }
+
       setSelectedId(newNote.id);
       setEditorNote({ ...newNote, content: '' });
       setSaveState('saved');
@@ -267,18 +422,16 @@ export default function Notes() {
     } finally {
       setCreating(false);
     }
-  };
+  }, [activeCanvasId, allNotes]);
 
-  // ── Auto-save ────────────────────────────────────────────────────────────────
+  // ── Auto-save ──────────────────────────────────────────────────────────────
   const persistSave = useCallback(async (id, data) => {
     setSaveState('saving');
     try {
       const r = await api.put(`/notes/${id}`, data);
-      setNotes(prev => prev.map(n => n.id === id ? { ...n, title: r.data.title, updatedAt: r.data.updatedAt } : n));
+      setAllNotes(prev => prev.map(n => n.id === id ? { ...n, title: r.data.title, updatedAt: r.data.updatedAt } : n));
       setSaveState('saved');
-    } catch (e) {
-      setSaveState('error');
-    }
+    } catch { setSaveState('error'); }
   }, []);
 
   const handleEditorChange = useCallback((field, value) => {
@@ -289,35 +442,36 @@ export default function Notes() {
     saveTimer.current = setTimeout(() => persistSave(editorNote.id, { [field]: value }), 1000);
   }, [editorNote, persistSave]);
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
+  // ── Delete ─────────────────────────────────────────────────────────────────
   const handleDelete = async () => {
     if (!editorNote) return;
     try {
       await api.delete(`/notes/${editorNote.id}`);
-      setNotes(prev => prev.filter(n => n.id !== editorNote.id));
+      // Remove the note + all its descendants from local state (DB cascade handles the rest)
+      const toDelete = new Set();
+      const collect = (id) => {
+        toDelete.add(id);
+        allNotes.filter(n => n.parentId === id).forEach(n => collect(n.id));
+      };
+      collect(editorNote.id);
+      setAllNotes(prev => prev.filter(n => !toDelete.has(n.id)));
       setEditorNote(null);
       setSelectedId(null);
       setDeleteConfirm(false);
-      refreshCounts();
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   };
 
-  // ── Password management callbacks ────────────────────────────────────────────
+  // ── Password management ────────────────────────────────────────────────────
   const handlePwSuccess = (step) => {
     if (step === 'set') { setHasPassword(true); setIsUnlocked(true); }
     else if (step === 'remove') { setHasPassword(false); setIsUnlocked(true); }
-    // 'change' — remain unlocked
     setPwMgmtOpen(false);
   };
 
-  const allNoteCounts = useMemo(() => noteCounts, [noteCounts]);
-
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Box sx={{ height: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column', gap: 0 }}>
-      <CanvasSelector screen="notes" countsByCanvas={allNoteCounts} />
+      <CanvasSelector screen="notes" countsByCanvas={noteCounts} />
 
       <Box sx={{ display: 'flex', flex: 1, gap: 0, overflow: 'hidden', borderRadius: 3, border: '1px solid #e2e8f0', bgcolor: 'background.paper' }}>
 
@@ -327,14 +481,12 @@ export default function Notes() {
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
               <Typography fontWeight={700} variant="subtitle1">Notes</Typography>
               <Box display="flex" gap={0.5}>
-                {/* Password settings icon */}
                 <Tooltip title={hasPassword ? 'Password settings' : 'Set a password'}>
                   <IconButton size="small" onClick={() => setPwMgmtOpen(true)}
                     sx={{ color: hasPassword ? '#6366f1' : 'text.disabled' }}>
                     {hasPassword ? <Lock sx={{ fontSize: 16 }} /> : <LockOpen sx={{ fontSize: 16 }} />}
                   </IconButton>
                 </Tooltip>
-                {/* Lock now button — only visible when notes are unlocked and has password */}
                 {hasPassword && isUnlocked && (
                   <Tooltip title="Lock notes">
                     <IconButton size="small" onClick={() => setIsUnlocked(false)} sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' } }}>
@@ -344,7 +496,7 @@ export default function Notes() {
                 )}
                 <Button size="small" variant="contained"
                   startIcon={creating ? <CircularProgress size={14} /> : <Add />}
-                  onClick={handleCreate} disabled={creating || !isUnlocked}
+                  onClick={() => handleCreate(null)} disabled={creating || !isUnlocked}
                   sx={{ borderRadius: 2, textTransform: 'none', fontSize: '0.78rem', py: 0.5 }}>
                   New
                 </Button>
@@ -364,7 +516,8 @@ export default function Notes() {
             />
           </Box>
           <Divider />
-          {/* List */}
+
+          {/* ── List / Tree ── */}
           <Box sx={{ flex: 1, overflowY: 'auto' }}>
             {!isUnlocked ? (
               <Box textAlign="center" pt={6} px={2}>
@@ -373,40 +526,63 @@ export default function Notes() {
               </Box>
             ) : listLoading ? (
               <Box display="flex" justifyContent="center" pt={4}><CircularProgress size={24} /></Box>
-            ) : notes.length === 0 ? (
-              <Box textAlign="center" pt={6} px={2}>
-                <NoteAlt sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                <Typography variant="body2" color="text.secondary">
-                  {search ? 'No notes match your search' : 'No notes yet. Click New to start.'}
-                </Typography>
-              </Box>
-            ) : (
-              notes.map(note => {
-                const active = selectedId === note.id;
-                const canvas = canvases.find(c => c.id === note.canvasId);
-                return (
-                  <Box key={note.id} onClick={() => openNote(note)}
-                    sx={{
-                      px: 2, py: 1.5, cursor: 'pointer', borderLeft: '3px solid',
-                      borderLeftColor: active ? '#6366f1' : 'transparent',
-                      bgcolor: active ? '#f5f3ff' : 'transparent',
-                      borderBottom: '1px solid #f1f5f9',
-                      '&:hover': { bgcolor: active ? '#f5f3ff' : '#f8fafc' },
-                    }}>
-                    <Typography variant="body2" fontWeight={600}
-                      sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: active ? '#4f46e5' : 'text.primary' }}>
-                      {note.title}
-                    </Typography>
-                    <Box display="flex" alignItems="center" gap={0.75} mt={0.4} flexWrap="wrap">
-                      <Typography variant="caption" color="text.disabled">{timeAgo(note.updatedAt)}</Typography>
-                      {canvas && (
-                        <Chip label={canvas.name} size="small"
-                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: canvas.color + '22', color: canvas.color, border: 'none', fontWeight: 600 }} />
-                      )}
+            ) : search ? (
+              // Flat search results
+              flatSearchResults.length === 0 ? (
+                <Box textAlign="center" pt={6} px={2}>
+                  <NoteAlt sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                  <Typography variant="body2" color="text.secondary">No notes match your search</Typography>
+                </Box>
+              ) : (
+                flatSearchResults.map(note => {
+                  const active = selectedId === note.id;
+                  const canvas = canvases.find(c => c.id === note.canvasId);
+                  return (
+                    <Box key={note.id} onClick={() => openNote(note)}
+                      sx={{
+                        px: 2, py: 1.5, cursor: 'pointer', borderLeft: '3px solid',
+                        borderLeftColor: active ? '#6366f1' : 'transparent',
+                        bgcolor: active ? '#f5f3ff' : 'transparent',
+                        borderBottom: '1px solid #f1f5f9',
+                        '&:hover': { bgcolor: active ? '#f5f3ff' : '#f8fafc' },
+                      }}>
+                      <Typography variant="body2" fontWeight={600}
+                        sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: active ? '#4f46e5' : 'text.primary' }}>
+                        {note.title}
+                      </Typography>
+                      <Box display="flex" alignItems="center" gap={0.75} mt={0.4} flexWrap="wrap">
+                        <Typography variant="caption" color="text.disabled">{timeAgo(note.updatedAt)}</Typography>
+                        {canvas && (
+                          <Chip label={canvas.name} size="small"
+                            sx={{ height: 16, fontSize: '0.6rem', bgcolor: canvas.color + '22', color: canvas.color, border: 'none', fontWeight: 600 }} />
+                        )}
+                      </Box>
                     </Box>
-                  </Box>
-                );
-              })
+                  );
+                })
+              )
+            ) : (
+              // Tree mode
+              visibleTree.length === 0 ? (
+                <Box textAlign="center" pt={6} px={2}>
+                  <NoteAlt sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                  <Typography variant="body2" color="text.secondary">No notes yet. Click New to start.</Typography>
+                </Box>
+              ) : (
+                visibleTree.map(root => (
+                  <NoteTreeItem
+                    key={root.id}
+                    note={root}
+                    depth={0}
+                    selectedId={selectedId}
+                    onSelect={openNote}
+                    onAddChild={handleCreate}
+                    expandedIds={expandedIds}
+                    onToggle={toggleExpand}
+                    canvases={canvases}
+                  />
+                ))
+              )
             )}
           </Box>
         </Box>
@@ -414,7 +590,7 @@ export default function Notes() {
         {/* ── Right panel ── */}
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {!isUnlocked ? (
-            <UnlockScreen onUnlocked={() => { setIsUnlocked(true); fetchNotes(search, activeCanvasId); refreshCounts(); }} />
+            <UnlockScreen onUnlocked={() => { setIsUnlocked(true); fetchNotes(); }} />
           ) : !editorNote ? (
             <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" height="100%" color="text.disabled">
               <NoteAlt sx={{ fontSize: 56, mb: 2 }} />
@@ -427,17 +603,40 @@ export default function Notes() {
               <Box sx={{ px: 3, py: 1.5, borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box display="flex" alignItems="center" gap={0.5} sx={{ flex: 1 }}>
                   {saveState === 'saving' && <><CircularProgress size={12} /><Typography variant="caption" color="text.disabled">Saving…</Typography></>}
-                  {saveState === 'saved' && <><CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} /><Typography variant="caption" color="text.disabled">Saved</Typography></>}
-                  {saveState === 'error' && <Typography variant="caption" color="error">Save failed</Typography>}
+                  {saveState === 'saved'  && <><CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} /><Typography variant="caption" color="text.disabled">Saved</Typography></>}
+                  {saveState === 'error'  && <Typography variant="caption" color="error">Save failed</Typography>}
                 </Box>
-                <Tooltip title="Delete note">
+                <Tooltip title="Delete note (and all children)">
                   <IconButton size="small" onClick={() => setDeleteConfirm(true)} sx={{ color: 'text.disabled', '&:hover': { color: '#dc2626' } }}>
                     <Delete sx={{ fontSize: 18 }} />
                   </IconButton>
                 </Tooltip>
               </Box>
+              {/* Breadcrumb */}
+              {editorNote.parentId && (() => {
+                const ancestorIds = getAncestorIds(editorNote.id, allNotes).reverse();
+                const ancestors = ancestorIds.map(id => allNotes.find(n => n.id === id)).filter(Boolean);
+                return ancestors.length > 0 ? (
+                  <Box sx={{ px: 3, pt: 2, pb: 0, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25 }}>
+                    {ancestors.map((anc, i) => (
+                      <Box key={anc.id} display="flex" alignItems="center">
+                        {i > 0 && <ChevronRight sx={{ fontSize: 14, color: 'text.disabled', mx: 0.25 }} />}
+                        <Typography
+                          variant="caption"
+                          sx={{ color: '#6366f1', cursor: 'pointer', fontWeight: 500, '&:hover': { textDecoration: 'underline' } }}
+                          onClick={() => openNote(anc)}
+                        >
+                          {anc.title || 'Untitled'}
+                        </Typography>
+                      </Box>
+                    ))}
+                    <ChevronRight sx={{ fontSize: 14, color: 'text.disabled', mx: 0.25 }} />
+                    <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>{editorNote.title || 'Untitled'}</Typography>
+                  </Box>
+                ) : null;
+              })()}
               {/* Title */}
-              <Box sx={{ px: 3, pt: 2.5, pb: 0 }}>
+              <Box sx={{ px: 3, pt: editorNote.parentId ? 1.5 : 2.5, pb: 0 }}>
                 <TextField
                   fullWidth variant="standard" placeholder="Note title…"
                   value={editorNote.title} onChange={e => handleEditorChange('title', e.target.value)}
@@ -449,17 +648,72 @@ export default function Notes() {
               </Box>
               <Divider sx={{ mx: 3, my: 1.5 }} />
               {/* Body */}
-              <Box sx={{ flex: 1, px: 3, pb: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ flex: 1, px: 3, pb: 3, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <TextField
                   fullWidth multiline variant="standard" placeholder="Start writing…"
                   value={editorNote.content} onChange={e => handleEditorChange('content', e.target.value)}
+                  minRows={8}
                   InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem', lineHeight: 1.7, alignItems: 'flex-start' } }}
                   sx={{
-                    flex: 1,
-                    '& .MuiInputBase-root': { height: '100%', alignItems: 'flex-start' },
-                    '& textarea': { height: '100% !important', resize: 'none', overflowY: 'auto !important' },
+                    '& .MuiInputBase-root': { alignItems: 'flex-start' },
+                    '& textarea': { resize: 'none' },
                   }}
                 />
+                {/* Sub-notes section */}
+                {(() => {
+                  const children = allNotes.filter(n => n.parentId === editorNote.id);
+                  return (
+                    <Box sx={{ mt: 1, borderTop: '1px solid #f1f5f9', pt: 2 }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <SubdirectoryArrowRight sx={{ fontSize: 16, color: 'text.disabled' }} />
+                          <Typography variant="caption" fontWeight={700} color="text.secondary" textTransform="uppercase" letterSpacing="0.06em">
+                            Sub-notes
+                          </Typography>
+                          {children.length > 0 && (
+                            <Box sx={{ px: 0.75, py: 0.1, borderRadius: 10, bgcolor: '#6366f122', minWidth: 20, textAlign: 'center' }}>
+                              <Typography variant="caption" fontWeight={700} sx={{ color: '#6366f1', fontSize: '0.7rem' }}>{children.length}</Typography>
+                            </Box>
+                          )}
+                        </Box>
+                        <Tooltip title="Add sub-note">
+                          <IconButton size="small" onClick={() => handleCreate(editorNote.id)}
+                            sx={{ color: '#6366f1', bgcolor: '#6366f111', '&:hover': { bgcolor: '#6366f122' }, width: 26, height: 26 }}>
+                            <Add sx={{ fontSize: 15 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                      {children.length === 0 ? (
+                        <Box sx={{ py: 2, textAlign: 'center', border: '1.5px dashed #e2e8f0', borderRadius: 2 }}>
+                          <Typography variant="caption" color="text.disabled">No sub-notes yet — click + to add one</Typography>
+                        </Box>
+                      ) : (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                          {children.map(child => (
+                            <Box
+                              key={child.id}
+                              onClick={() => openNote(child)}
+                              sx={{
+                                display: 'flex', alignItems: 'center', gap: 1.5,
+                                px: 2, py: 1.25, borderRadius: 2, cursor: 'pointer',
+                                border: '1px solid #e2e8f0',
+                                '&:hover': { bgcolor: '#f8f7ff', borderColor: '#c7d2fe' },
+                                transition: 'all 0.15s',
+                              }}
+                            >
+                              <NoteAlt sx={{ fontSize: 16, color: '#94a3b8', flexShrink: 0 }} />
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography variant="body2" fontWeight={600} noWrap>{child.title || 'Untitled'}</Typography>
+                                <Typography variant="caption" color="text.disabled">{timeAgo(child.updatedAt)}</Typography>
+                              </Box>
+                              <ChevronRight sx={{ fontSize: 16, color: 'text.disabled' }} />
+                            </Box>
+                          ))}
+                        </Box>
+                      )}
+                    </Box>
+                  );
+                })()}
               </Box>
             </Box>
           )}
@@ -478,7 +732,7 @@ export default function Notes() {
         <DialogTitle sx={{ fontWeight: 700 }}>Delete Note?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            <strong>{editorNote?.title}</strong> will be permanently deleted. This cannot be undone.
+            <strong>{editorNote?.title}</strong> will be permanently deleted, along with all its child notes. This cannot be undone.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

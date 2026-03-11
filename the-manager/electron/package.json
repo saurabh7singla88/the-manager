@@ -7,11 +7,13 @@
   "scripts": {
     "dev": "electron .",
     "postinstall": "prisma generate --schema=../backend/prisma/schema.prisma && node -e \"const {cpSync}=require('fs');cpSync('../backend/node_modules/@prisma/client','./node_modules/@prisma/client',{recursive:true,force:true});cpSync('../backend/node_modules/.prisma','./node_modules/.prisma',{recursive:true,force:true});console.log('Prisma client synced to electron/node_modules')\"",
+    "sync:prisma": "node -e \"const {cpSync}=require('fs');cpSync('../backend/node_modules/@prisma/client','./node_modules/@prisma/client',{recursive:true,force:true});cpSync('../backend/node_modules/.prisma','./node_modules/.prisma',{recursive:true,force:true});console.log('Prisma client synced')\"",
     "build:frontend": "cd ../frontend && npm run build",
-    "build": "npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --mac",
-    "build:win": "npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "build:win:installer": "npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=nsis",
-    "build:mac": "npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac"
+    "sign:mac": "codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac-arm64/The Manager.app' && codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac/The Manager.app' 2>/dev/null || true",
+    "dmg:mac": "hdiutil create -volname 'The Manager' -srcfolder 'dist/mac-arm64/The Manager.app' -ov -format UDZO 'dist/The Manager-arm64-signed.dmg' && echo 'DMG rebuilt with signed app'",
+    "build:mac": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac && npm run sign:mac && npm run dmg:mac",
+    "build:win": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "build:win:installer": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=nsis"
   },
   "build": {
     "appId": "com.themanager.app",
@@ -22,20 +24,37 @@
       "output": "dist"
     },
     "files": [
-      { "from": ".", "to": ".", "filter": ["main.js", "preload.cjs"] },
-      { "from": "../backend", "to": "backend", "filter": [
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "main.js",
+          "preload.cjs"
+        ]
+      },
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
           "src/**/*",
           "prisma/**/*",
           "package.json",
           "!prisma/dev.db"
         ]
       },
-      { "from": "../frontend/dist", "to": "frontend/dist" }
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
+      }
     ],
     "extraFiles": [
       {
         "from": "node_modules/.prisma",
         "to": "resources/app/node_modules/.prisma"
+      },
+      {
+        "from": "node_modules/prisma",
+        "to": "resources/prisma-cli"
       }
     ],
     "win": {
@@ -72,8 +91,7 @@
   "devDependencies": {
     "cross-env": "^10.1.0",
     "electron": "^29.0.0",
-    "electron-builder": "^24.0.0",
-    "prisma": "^5.8.0"
+    "electron-builder": "^24.0.0"
   },
   "dependencies": {
     "@prisma/client": "^5.8.0",
@@ -84,6 +102,7 @@
     "express-validator": "^7.0.1",
     "imapflow": "^1.2.12",
     "jsonwebtoken": "^9.0.2",
-    "mailparser": "^3.9.3"
+    "mailparser": "^3.9.3",
+    "prisma": "^5.8.0"
   }
 }

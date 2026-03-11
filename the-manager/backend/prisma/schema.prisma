@@ -2,7 +2,8 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "darwin", "darwin-arm64"]
 }
 
 datasource db {
@@ -204,6 +205,11 @@ model Note {
   isProtected  Boolean  @default(false)
   passwordHash String?
 
+  // Hierarchy — unlimited nesting depth
+  parentId     String?
+  parent       Note?    @relation("NoteChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children     Note[]   @relation("NoteChildren")
+
   canvasId     String?
   canvas       Canvas?  @relation(fields: [canvasId], references: [id], onDelete: SetNull)
 
@@ -215,6 +221,7 @@ model Note {
 
   @@index([createdById])
   @@index([canvasId])
+  @@index([parentId])
   @@map("notes")
 }
 

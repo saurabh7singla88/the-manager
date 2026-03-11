@@ -31,6 +31,12 @@ const stringify = (val) => {
 
 const base = new PrismaClient();
 
+// Keep the Prisma query engine process alive while the server is running.
+// The engine exits after ~5 min of idle by default — this prevents that.
+setInterval(() => {
+  base.$queryRaw`SELECT 1`.catch(() => {/* ignore — engine will reconnect */});
+}, 4 * 60 * 1000); // every 4 minutes
+
 export const prisma = base.$extends({
   // ── Read side: parse TEXT back to JS value ────────────────────────────────
   result: {

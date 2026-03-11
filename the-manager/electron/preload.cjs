@@ -5,6 +5,6 @@ const { contextBridge } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Platform info — useful for conditional UI behaviour
-  platform: process.platform,   // 'win32' | 'darwin' | 'linux'
-  isElectron: true
+  platform:  process.platform,   // 'win32' | 'darwin' | 'linux'
+  isElectron: true,
 });

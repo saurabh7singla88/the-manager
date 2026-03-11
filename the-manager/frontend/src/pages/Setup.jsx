@@ -2,12 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Button, TextField, Select, MenuItem,
   FormControl, InputLabel, Divider, CircularProgress, Alert,
-  InputAdornment, IconButton, Chip, Paper, Stepper, Step,
-  StepLabel, StepContent, Link,
+  InputAdornment, IconButton, Chip, Paper, Link,
 } from '@mui/material';
 import {
   SmartToy, Visibility, VisibilityOff, CheckCircle, Save,
-  Email, CheckCircleOutline, ErrorOutline, Launch, Label,
+  Email, CheckCircleOutline, ErrorOutline, Launch,
 } from '@mui/icons-material';
 import api from '../api/axios';
 
@@ -287,9 +286,55 @@ function AISection() {
 
 // ─── Gmail Section ────────────────────────────────────────────────────────────
 function GmailSection() {
-  const [testing, setTesting]     = useState(false);
-  const [testResult, setTestResult] = useState(null); // null | { ok, user?, error? }
-  const [defaultLabel, setDefaultLabel] = useState('Gemini Notes');
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState(false);
+  const [saved, setSaved]           = useState(false);
+  const [testing, setTesting]       = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [error, setError]           = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showGuide, setShowGuide]   = useState(false);
+
+  const [gmailUser, setGmailUser]       = useState('');
+  const [appPassword, setAppPassword]   = useState('');
+  const [gmailLabel, setGmailLabel]     = useState('Gemini Notes');
+  const [gmailSearch, setGmailSearch]   = useState('gemini');
+  const [status, setStatus] = useState({ userSet: false, passwordSet: false, source: 'none', user: '' });
+
+  useEffect(() => {
+    api.get('/gmail/settings')
+      .then(r => {
+        setStatus(r.data);
+        setGmailUser(r.data.user || '');
+        setGmailLabel(r.data.label || 'Gemini Notes');
+        setGmailSearch(r.data.search || 'gemini');
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = useCallback(async () => {
+    if (!gmailUser.trim()) { setError('Gmail address is required.'); return; }
+    if (!appPassword.trim() && !status.passwordSet) { setError('App Password is required.'); return; }
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      const payload = {
+        user: gmailUser.trim(),
+        label: gmailLabel.trim() || 'Gemini Notes',
+        search: gmailSearch.trim() || 'gemini',
+      };
+      if (appPassword.trim()) payload.appPassword = appPassword.trim();
+      const r = await api.put('/gmail/settings', payload);
+      setSaved(true);
+      setStatus(s => ({ ...s, userSet: true, passwordSet: true, user: gmailUser.trim(), encrypted: r.data?.encrypted, source: 'db' }));
+      setAppPassword('');
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [gmailUser, appPassword, gmailLabel, gmailSearch, status.passwordSet]);
 
   const testConnection = useCallback(async () => {
     setTesting(true);
@@ -306,173 +351,174 @@ function GmailSection() {
 
   return (
     <Box display="flex" flexDirection="column" gap={3}>
-      {/* Overview */}
       <Alert severity="info" sx={{ borderRadius: 2 }}>
-        Gmail integration fetches emails from a label (e.g. <strong>Gemini Notes</strong>) and shows
-        them in the <strong>Meeting Notes</strong> page. It uses IMAP with a Google App Password —
-        no OAuth flow required.
+        Gmail integration fetches emails from a label (e.g. <strong>Gemini Notes</strong>) using IMAP
+        and an App Password — no OAuth flow required. Credentials are stored encrypted in the database.
       </Alert>
 
-      {/* Step-by-step */}
-      <Stepper orientation="vertical" nonLinear>
+      {/* Credentials form */}
+      {loading ? (
+        <Box display="flex" justifyContent="center" py={2}><CircularProgress size={24} /></Box>
+      ) : (
+        <Box display="flex" flexDirection="column" gap={2}>
+          {status.userSet && status.passwordSet && (
+            <Alert severity="success" icon={<CheckCircleOutline />} sx={{ borderRadius: 2 }}>
+              Credentials saved for <strong>{status.user}</strong>
+              {status.encrypted ? ' · password encrypted ✓' : ''}
+              {status.source === 'env' ? ' (from .env)' : ''}
+            </Alert>
+          )}
 
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">Enable 2-Step Verification on your Google account</Typography>
-          </StepLabel>
-          <StepContent>
-            <Typography variant="body2" color="text.secondary" mb={1}>
-              Required before you can generate App Passwords.
-            </Typography>
+          <TextField
+            label="Gmail address"
+            type="email"
+            size="small"
+            value={gmailUser}
+            onChange={e => setGmailUser(e.target.value)}
+            placeholder="you@gmail.com"
+            fullWidth
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          />
+
+          <TextField
+            label="App Password"
+            type={showPassword ? 'text' : 'password'}
+            size="small"
+            value={appPassword}
+            onChange={e => setAppPassword(e.target.value)}
+            placeholder={status.passwordSet ? '••••••••••••••••  (leave blank to keep current)' : 'xxxx xxxx xxxx xxxx'}
+            fullWidth
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setShowPassword(v => !v)} edge="end">
+                    {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+
+          <Divider sx={{ my: 0.5 }} />
+
+          <TextField
+            label="Gmail Label"
+            size="small"
+            value={gmailLabel}
+            onChange={e => setGmailLabel(e.target.value)}
+            placeholder="Gemini Notes"
+            fullWidth
+            helperText="Gmail label to fetch emails from (e.g. Gemini Notes, INBOX)"
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          />
+
+          <TextField
+            label="Search Filter"
+            size="small"
+            value={gmailSearch}
+            onChange={e => setGmailSearch(e.target.value)}
+            placeholder="gemini"
+            fullWidth
+            helperText="Used when no label is set — filters by sender or subject"
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          />
+
+          {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
+
+          <Box display="flex" gap={1.5} alignItems="center" flexWrap="wrap">
             <Button
-              size="small" variant="outlined" endIcon={<Launch fontSize="small" />}
-              href="https://myaccount.google.com/security" target="_blank" rel="noopener"
-              sx={{ borderRadius: 2, textTransform: 'none', fontSize: '0.8rem' }}
+              variant="contained"
+              onClick={save}
+              disabled={saving || (!gmailUser.trim() && !appPassword.trim())}
+              startIcon={
+                saving ? <CircularProgress size={14} sx={{ color: 'inherit' }} />
+                : saved  ? <CheckCircle fontSize="small" />
+                : <Save fontSize="small" />
+              }
+              sx={{
+                borderRadius: 2, textTransform: 'none', fontWeight: 600,
+                bgcolor: saved ? 'success.main' : undefined,
+                '&:hover': { bgcolor: saved ? 'success.dark' : undefined },
+              }}
             >
-              myaccount.google.com/security
+              {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Credentials'}
             </Button>
-          </StepContent>
-        </Step>
-
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">Generate an App Password</Typography>
-          </StepLabel>
-          <StepContent>
-            <Typography variant="body2" color="text.secondary" mb={1}>
-              Visit App Passwords, create a new one (name it "The Manager"), and copy the 16-character password.
-            </Typography>
-            <Button
-              size="small" variant="outlined" endIcon={<Launch fontSize="small" />}
-              href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"
-              sx={{ borderRadius: 2, textTransform: 'none', fontSize: '0.8rem' }}
-            >
-              myaccount.google.com/apppasswords
-            </Button>
-          </StepContent>
-        </Step>
-
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">Add credentials to <code>backend/.env</code></Typography>
-          </StepLabel>
-          <StepContent>
-            <Box
-              component="pre"
-              sx={{
-                bgcolor: '#1e293b', color: '#e2e8f0', borderRadius: 2,
-                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 1,
-              }}
-            >
-{`GMAIL_USER=you@gmail.com
-GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`}
-            </Box>
-          </StepContent>
-        </Step>
-
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">
-              Encrypt the password <Chip label="Recommended" size="small" sx={{ ml: 1, bgcolor: '#f0fdf4', color: '#166534', fontWeight: 700, fontSize: '0.65rem' }} />
-            </Typography>
-          </StepLabel>
-          <StepContent>
-            <Typography variant="body2" color="text.secondary" mb={1.5}>
-              Run this once from the <code>backend/</code> folder. It generates an AES-256 key, encrypts
-              your password in-place, and writes both back to <code>.env</code> — no copy-pasting needed.
-            </Typography>
-            <Box
-              component="pre"
-              sx={{
-                bgcolor: '#1e293b', color: '#86efac', borderRadius: 2,
-                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 1,
-              }}
-            >
-{`cd backend
-node setup-env.js`}
-            </Box>
-            <Typography variant="caption" color="text.secondary">
-              After running, your <code>.env</code> will have{' '}
-              <code>TOKEN_ENCRYPTION_KEY=…</code> and{' '}
-              <code>GMAIL_APP_PASSWORD=enc:…</code>. The plaintext is never stored.
-            </Typography>
-          </StepContent>
-        </Step>
-
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">Restart the backend and test</Typography>
-          </StepLabel>
-          <StepContent>
-            <Box
-              component="pre"
-              sx={{
-                bgcolor: '#1e293b', color: '#e2e8f0', borderRadius: 2,
-                p: 2, fontSize: '0.8rem', lineHeight: 1.7, overflow: 'auto', mb: 2,
-              }}
-            >
-{`cd backend && npm run dev`}
-            </Box>
 
             <Button
-              variant="outlined" onClick={testConnection} disabled={testing}
-              startIcon={testing
-                ? <CircularProgress size={14} />
-                : testResult?.ok
-                  ? <CheckCircleOutline sx={{ color: 'success.main' }} />
-                  : <Email />
+              variant="outlined"
+              onClick={testConnection}
+              disabled={testing || (!status.userSet && !status.passwordSet)}
+              startIcon={
+                testing
+                  ? <CircularProgress size={14} />
+                  : testResult?.ok
+                    ? <CheckCircleOutline sx={{ color: 'success.main' }} />
+                    : <Email />
               }
               sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
             >
-              {testing ? 'Testing…' : 'Test Gmail Connection'}
+              {testing ? 'Testing…' : 'Test Connection'}
             </Button>
+          </Box>
 
-            {testResult && (
-              <Alert
-                severity={testResult.ok ? 'success' : 'error'}
-                icon={testResult.ok ? <CheckCircleOutline /> : <ErrorOutline />}
-                sx={{ mt: 1.5, borderRadius: 2 }}
+          {testResult && (
+            <Alert
+              severity={testResult.ok ? 'success' : 'error'}
+              icon={testResult.ok ? <CheckCircleOutline /> : <ErrorOutline />}
+              sx={{ borderRadius: 2 }}
+            >
+              {testResult.ok
+                ? <>Connected as <strong>{testResult.user}</strong>{testResult.encrypted ? ' · password encrypted ✓' : ''}</>
+                : testResult.error
+              }
+            </Alert>
+          )}
+        </Box>
+      )}
+
+      {/* Collapsible how-to guide */}
+      <Box>
+        <Button
+          size="small"
+          onClick={() => setShowGuide(v => !v)}
+          sx={{ textTransform: 'none', color: 'text.secondary', fontWeight: 500, pl: 0 }}
+        >
+          {showGuide ? '▲ Hide guide' : '▼ How to get a Google App Password'}
+        </Button>
+        {showGuide && (
+          <Box mt={1.5} display="flex" flexDirection="column" gap={1.5} pl={0.5}>
+            <Typography variant="body2" color="text.secondary">
+              <strong>1. Enable 2-Step Verification</strong> — required before generating App Passwords.{' '}
+              <Button
+                size="small" variant="text" endIcon={<Launch fontSize="small" />}
+                href="https://myaccount.google.com/security" target="_blank" rel="noopener"
+                sx={{ textTransform: 'none', fontSize: '0.8rem', p: 0, minWidth: 0, verticalAlign: 'baseline' }}
               >
-                {testResult.ok
-                  ? <>Connected as <strong>{testResult.user}</strong>{testResult.encrypted ? ' · password encrypted ✓' : ' · password is plaintext (run setup-env.js to encrypt)'}</>
-                  : testResult.error
-                }
-              </Alert>
-            )}
-          </StepContent>
-        </Step>
-
-        <Step active>
-          <StepLabel>
-            <Typography fontWeight={600} fontSize="0.9rem">Go to Meeting Notes</Typography>
-          </StepLabel>
-          <StepContent>
-            <Typography variant="body2" color="text.secondary" mb={1.5}>
-              Navigate to <strong>Meeting Notes</strong> in the sidebar. The default label is{' '}
-              <strong>Gemini Notes</strong> — change it to whatever Gmail label you use, or type a custom one.
+                Open Security settings
+              </Button>
             </Typography>
-            <Box display="flex" alignItems="center" gap={1.5}>
-              <TextField
-                size="small"
-                label="Default label"
-                value={defaultLabel}
-                onChange={e => setDefaultLabel(e.target.value)}
-                sx={{ width: 220, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start"><Label sx={{ fontSize: 16, color: '#94a3b8' }} /></InputAdornment>,
-                }}
-              />
-              <Typography variant="caption" color="text.secondary">
-                e.g. <code>Gemini Notes</code>, <code>INBOX</code>, or any custom Gmail label
-              </Typography>
-            </Box>
-          </StepContent>
-        </Step>
-
-      </Stepper>
+            <Typography variant="body2" color="text.secondary">
+              <strong>2. Generate an App Password</strong> — create one named "The Manager" and copy the 16-character code.{' '}
+              <Button
+                size="small" variant="text" endIcon={<Launch fontSize="small" />}
+                href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"
+                sx={{ textTransform: 'none', fontSize: '0.8rem', p: 0, minWidth: 0, verticalAlign: 'baseline' }}
+              >
+                Open App Passwords
+              </Button>
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              <strong>3. Paste it above</strong> — enter your Gmail address and the App Password, then click{' '}
+              <em>Save Credentials</em>. The password is encrypted (AES-256) before being stored in the database.
+            </Typography>
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
+
 
 // ─── Main Setup page ──────────────────────────────────────────────────────────
 export default function Setup() {
