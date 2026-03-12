@@ -313,6 +313,14 @@ export default function InitiativesList() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this initiative and all its children?')) {
       await dispatch(deleteInitiative(id));
+      // Remove the deleted item (and any of its children) from the local childrenMap
+      setChildrenMap(prev => {
+        const next = {};
+        for (const [parentId, children] of Object.entries(prev)) {
+          next[parentId] = children.filter(c => c.id !== id);
+        }
+        return next;
+      });
       doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
     }
   };

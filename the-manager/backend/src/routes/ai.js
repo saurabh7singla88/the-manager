@@ -83,21 +83,23 @@ async function callOpenAI(settings, systemPrompt, userPrompt) {
 }
 
 // ─── Provider: Google Gemini ──────────────────────────────────────────────────
+// Returns { text: string } on success, or { error: string } on failure.
+// Pass schemaOverride=false for free-text (non-JSON) responses.
 async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = null) {
-  if (!settings.ai_gemini_api_key) return null;
+  if (!settings.ai_gemini_api_key) return { error: 'Gemini API key not configured. Add it in Setup → AI Settings.' };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
   const defaultSchema = {
-    type: 'object',
+    type: 'OBJECT',
     properties: {
       results: {
-        type: 'array',
+        type: 'ARRAY',
         items: {
-          type: 'object',
+          type: 'OBJECT',
           properties: {
-            id: { type: 'string' },
-            urgency: { type: 'number' },
-            reason: { type: 'string' },
+            id:      { type: 'STRING' },
+            urgency: { type: 'NUMBER' },
+            reason:  { type: 'STRING' },
           },
           required: ['id', 'urgency', 'reason'],
         },
@@ -105,39 +107,43 @@ async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = n
     },
     required: ['results'],
   };
+  // schemaOverride=false → plain text response (no JSON schema enforcement)
+  const useSchema = schemaOverride !== false;
+  const schema = useSchema ? (schemaOverride || defaultSchema) : null;
   try {
     const model = settings.ai_gemini_model || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.ai_gemini_api_key}`;
+    const generationConfig = useSchema
+      ? { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1, maxOutputTokens: 4096 }
+      : { temperature: 0.2, maxOutputTokens: 4096 };
     const res = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: schemaOverride || defaultSchema,
-          temperature: 0.1,
-          maxOutputTokens: 4096,
-        },
+        generationConfig,
       }),
     });
 
     const data = await res.json();
 
     if (!res.ok) {
-      logger.error('Gemini API error', { status: res.status, model: settings.ai_gemini_model, error: data?.error });
-      return null;
+      const msg = data?.error?.message || `HTTP ${res.status}`;
+      logger.error('Gemini API error', { status: res.status, model, error: data?.error });
+      return { error: `Gemini error: ${msg}` };
     }
 
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.[0]?.text?.trim();
     if (!text) {
-      logger.warn('Gemini returned no text', { finishReason: data.candidates?.[0]?.finishReason });
-      return null;
+      const reason = candidate?.finishReason || 'unknown';
+      logger.warn('Gemini returned no text', { finishReason: reason, promptFeedback: data?.promptFeedback });
+      return { error: `Gemini returned no content (finishReason: ${reason})` };
     }
-    return text;
+    return { text };
   } catch (e) {
     logger.error('Gemini call failed', e);
-    return null;
+    return { error: e.name === 'AbortError' ? 'Gemini request timed out' : e.message };
   } finally { clearTimeout(timer); }
 }
 
@@ -177,7 +183,11 @@ Be generous: if ANY urgency is implied or suggested, score it above 30.`;
   if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
   else if (provider === 'openai') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
   else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
-  else if (provider === 'gemini') rawText = await callGemini(settings, systemPrompt, userPrompt, null);
+  else if (provider === 'gemini') {
+    const r = await callGemini(settings, systemPrompt, userPrompt, null);
+    rawText = r.text || null;
+    if (r.error) logger.warn('Gemini urgency analysis failed', { error: r.error });
+  }
 
   if (!rawText) {
     logger.warn(`LLM urgency analysis returned no response`, { provider });
@@ -452,16 +462,16 @@ router.get('/suggestions', async (req, res, next) => {
 
 // ─── Action items extractor ──────────────────────────────────────────────────
 const ACTION_ITEMS_GEMINI_SCHEMA = {
-  type: 'object',
+  type: 'OBJECT',
   properties: {
     items: {
-      type: 'array',
+      type: 'ARRAY',
       items: {
-        type: 'object',
+        type: 'OBJECT',
         properties: {
-          text:     { type: 'string' },
-          assignee: { type: 'string' },
-          isForMe:  { type: 'boolean' },
+          text:     { type: 'STRING' },
+          assignee: { type: 'STRING' },
+          isForMe:  { type: 'BOOLEAN' },
         },
         required: ['text', 'isForMe'],
       },
@@ -472,9 +482,14 @@ const ACTION_ITEMS_GEMINI_SCHEMA = {
 
 async function extractActionItems(emailText, subject, userName, settings) {
   const provider = settings.ai_provider || 'ollama';
-  if (provider === 'disabled') return { items: [], provider: 'disabled' };
+  if (provider === 'disabled') return { items: [], provider: 'disabled', llmCalled: false };
 
   const body = (emailText || '').slice(0, 6000);
+
+  if (!body.trim()) {
+    logger.warn('action-items: email body is empty, skipping LLM call');
+    return { items: [], provider, llmCalled: false, emptyBody: true };
+  }
   const systemPrompt = `You are a meeting notes assistant. Extract all action items from the email below.
 For each action item:
 - Write the task clearly and concisely
@@ -489,14 +504,19 @@ Format: { "items": [ { "text": "...", "assignee": "...", "isForMe": true/false }
 ${body}`;
 
   let rawText = null;
+  let llmError = null;
   if (provider === 'ollama')            rawText = await callOllama(settings, systemPrompt, userPrompt);
   else if (provider === 'openai')       rawText = await callOpenAI(settings, systemPrompt, userPrompt);
   else if (provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
-  else if (provider === 'gemini')       rawText = await callGemini(settings, systemPrompt, userPrompt, ACTION_ITEMS_GEMINI_SCHEMA);
+  else if (provider === 'gemini') {
+    const result = await callGemini(settings, systemPrompt, userPrompt, ACTION_ITEMS_GEMINI_SCHEMA);
+    if (result.error) llmError = result.error;
+    else rawText = result.text;
+  }
 
   if (!rawText) {
-    logger.warn('LLM action-items extraction returned no response', { provider });
-    return { items: [], provider };
+    logger.warn('LLM action-items extraction returned no response', { provider, llmError });
+    return { items: [], provider, llmCalled: true, llmFailed: true, llmError };
   }
 
   try {
@@ -513,12 +533,112 @@ ${body}`;
         isForMe:  Boolean(a.isForMe ?? a.is_for_me ?? false),
       })).filter(a => a.text.length > 0),
       provider,
+      llmCalled: true,
     };
   } catch (e) {
     logger.warn('Failed to parse LLM action-items response', { provider, error: e.message });
-    return { items: [], provider };
+    return { items: [], provider, llmCalled: true, llmFailed: true };
   }
 }
+
+// POST /api/ai/summarize-meetings
+router.post('/summarize-meetings', async (req, res, next) => {
+  try {
+    const { initiativeTitle, notes } = req.body;
+    if (!Array.isArray(notes) || notes.length === 0)
+      return res.status(400).json({ error: 'notes array required' });
+
+    const settings = await loadAISettings();
+    const provider = settings.ai_provider || 'ollama';
+    if (provider === 'disabled') return res.json({ summary: null, provider: 'disabled' });
+
+    const notesText = notes.map((n, i) => {
+      const header = [
+        n.date ? `Date: ${new Date(n.date).toDateString()}` : null,
+        n.subject ? `Subject: ${n.subject}` : null,
+        n.fromEmail ? `From: ${n.fromEmail}` : null,
+      ].filter(Boolean).join(' | ');
+      return `--- Meeting ${i + 1} ---\n${header}\n${(n.body || '').slice(0, 2000).trim()}`;
+    }).join('\n\n');
+
+    const systemPrompt = `You are an expert meeting summarizer. Given a set of meeting notes all related to the same initiative, produce a concise consolidated summary.
+Structure your response as:
+**Key Decisions**
+- bullet points
+
+**Action Items**
+- bullet points
+
+**Open Questions / Risks**
+- bullet points
+
+**Overall Summary**
+2-3 sentence narrative.
+
+Be concise and factual. Omit sections that have no relevant content.`;
+
+    const userPrompt = `Initiative: ${initiativeTitle || 'Untitled'}\n\n${notesText}`;
+
+    let rawText = null;
+    let llmError = null;
+    if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
+    else if (provider === 'openai' || provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+    else if (provider === 'gemini') {
+      const r = await callGemini(settings, systemPrompt, userPrompt, false);
+      if (r.error) llmError = r.error;
+      else rawText = r.text;
+    }
+
+    if (!rawText)
+      return res.status(502).json({ error: llmError || 'AI provider did not respond. Check AI settings.' });
+
+    return res.json({ summary: rawText.trim(), provider });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ai/rephrase
+// Body: { text: string, style: 'professional'|'elaborate'|'concise'|'simplify' }
+router.post('/rephrase', async (req, res, next) => {
+  try {
+    const { text, style = 'professional' } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+
+    const settings = await loadAISettings();
+    const provider = settings.ai_provider || 'ollama';
+    if (provider === 'disabled') return res.status(503).json({ error: 'AI provider is disabled.' });
+
+    const styleInstructions = {
+      professional: 'Rewrite the following text to be professional, clear, and business-appropriate. Use formal language, remove casual or vague phrasing, and ensure it is concise yet complete.',
+      elaborate:    'Expand and elaborate on the following text. Add relevant detail, context, and explanation to make it more comprehensive and informative while staying on topic.',
+      concise:      'Make the following text shorter and more concise. Remove repetition, filler words, and unnecessary detail. Keep only the essential information.',
+      simplify:     'Rewrite the following text using simple, plain language. Avoid jargon and complex sentence structures. Make it easy to understand for anyone.',
+    };
+
+    const instruction = styleInstructions[style] || styleInstructions.professional;
+    const systemPrompt = `You are an expert writing assistant. ${instruction}\n\nReturn ONLY the rewritten text with no explanations, introductions, or meta-commentary. Do not add quotes around the output.`;
+    const userPrompt = text.trim();
+
+    let rawText = null;
+    let llmError = null;
+
+    if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
+    else if (provider === 'openai' || provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
+    else if (provider === 'gemini') {
+      const r = await callGemini(settings, systemPrompt, userPrompt, false);
+      if (r.error) llmError = r.error;
+      else rawText = r.text;
+    }
+
+    if (!rawText)
+      return res.status(502).json({ error: llmError || 'AI provider did not respond. Check AI settings in Setup.' });
+
+    return res.json({ rephrased: rawText.trim(), provider });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/ai/action-items
 router.post('/action-items', async (req, res, next) => {
@@ -527,11 +647,11 @@ router.post('/action-items', async (req, res, next) => {
     if (!text && !subject) return res.status(400).json({ error: 'text or subject required' });
 
     const settings = await loadAISettings();
-    const { items, provider } = await extractActionItems(
+    const result = await extractActionItems(
       text, subject, userName || req.user?.name || 'me', settings,
     );
 
-    return res.json({ items, provider });
+    return res.json(result);
   } catch (err) {
     next(err);
   }

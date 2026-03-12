@@ -9,6 +9,7 @@ import brainstormRoutes from './routes/brainstorm.js';
 import aiRoutes from './routes/ai.js';
 import notesRoutes from './routes/notes.js';
 import gmailRoutes from './routes/gmail.js';
+import meetingNotesRoutes from './routes/meeting-notes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -41,6 +42,7 @@ app.use('/api/brainstorm', brainstormRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notes', notesRoutes);
 app.use('/api/gmail', gmailRoutes);
+app.use('/api/meeting-notes', meetingNotesRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

@@ -4,10 +4,11 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import InitiativesList from './pages/InitiativesList';
+import InitiativeDetail from './pages/InitiativeDetail';
 import MindMap from './pages/MindMap';
 import Tasks from './pages/Tasks';
 import Users from './pages/Users';
-import Brainstorm from './pages/Brainstorm';
+
 import Notes from './pages/Notes';
 import MeetingNotes from './pages/MeetingNotes';
 import Setup from './pages/Setup';
@@ -24,9 +25,10 @@ function App() {
       <Route element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/initiatives" element={<InitiativesList />} />
+        <Route path="/initiatives/:id" element={<InitiativeDetail />} />
         <Route path="/mindmap" element={<MindMap />} />
         <Route path="/tasks" element={<Tasks />} />
-        <Route path="/brainstorm" element={<Brainstorm />} />
+
         <Route path="/notes" element={<Notes />} />
         <Route path="/meeting-notes" element={<MeetingNotes />} />
         <Route path="/users" element={<Users />} />

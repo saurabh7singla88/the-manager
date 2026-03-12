@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import {
   Drawer, Box, Typography, IconButton, Tabs, Tab, Chip, Divider,
   TextField, Button, LinearProgress, Select, MenuItem, FormControl,
@@ -12,12 +13,13 @@ import {
   Close, Add, Delete, Edit, Link as LinkIcon, Comment,
   History, Info, OpenInNew, Send, CheckCircle, Label,
   CalendarToday, Person, TrendingUp, PersonAdd,
-  IosShare
+  IosShare, EventNote, ArrowBack, AutoFixHigh, ContentCopy, Done,
 } from '@mui/icons-material';
 import api from '../api/axios';
 import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives, fetchInitiatives } from '../features/initiatives/initiativesSlice';
 import { format, formatDistanceToNow } from 'date-fns';
 import InitiativeSummaryDialog from './InitiativeSummaryDialog';
+import RephraseTool from './RephraseTool';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9' },
@@ -48,8 +50,9 @@ function TabPanel({ value, idx, children }) {
   return value === idx ? <Box sx={{ flex: 1, overflowY: 'auto' }}>{children}</Box> : null;
 }
 
-export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) {
+export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pageMode = false }) {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { allItems, items } = useSelector(s => s.initiatives);
   const { user } = useSelector(s => s.auth);
   const { canvases } = useSelector(s => s.canvas);
@@ -77,6 +80,28 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   // Activity state
   const [activity, setActivity] = useState([]);
 
+  // Meeting notes state
+  const [meetingNotes, setMeetingNotes] = useState([]);
+  const [meetingSummaryOpen, setMeetingSummaryOpen] = useState(false);
+  const [meetingSummaryText, setMeetingSummaryText] = useState('');
+  const [meetingSummaryLoading, setMeetingSummaryLoading] = useState(false);
+  const [meetingSummaryError, setMeetingSummaryError] = useState(null);
+  const [meetingSummaryCopied, setMeetingSummaryCopied] = useState(false);
+  // manual add meeting note
+  const [addNoteOpen, setAddNoteOpen] = useState(false);
+  const [addNoteSubject, setAddNoteSubject] = useState('');
+  const [addNoteDate, setAddNoteDate] = useState('');
+  const [addNoteBody, setAddNoteBody] = useState('');
+  const [addNoteSaving, setAddNoteSaving] = useState(false);
+  const [addNoteError, setAddNoteError] = useState(null);
+  // edit meeting note
+  const [editNote, setEditNote] = useState(null); // the note being edited
+  const [editNoteSubject, setEditNoteSubject] = useState('');
+  const [editNoteDate, setEditNoteDate] = useState('');
+  const [editNoteBody, setEditNoteBody] = useState('');
+  const [editNoteSaving, setEditNoteSaving] = useState(false);
+  const [editNoteError, setEditNoteError] = useState(null);
+
   // Inline edit state
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -102,16 +127,18 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const fetchAll = useCallback(async (id) => {
     setLoading(true);
     try {
-      const [fullRes, linksRes, commentsRes, activityRes] = await Promise.all([
+      const [fullRes, linksRes, commentsRes, activityRes, meetingNotesRes] = await Promise.all([
         api.get(`/initiatives/${id}`),
         api.get(`/initiatives/${id}/links`),
         api.get(`/initiatives/${id}/comments`),
         api.get(`/initiatives/${id}/activity`),
+        api.get('/meeting-notes', { params: { initiativeId: id } }),
       ]);
       setFullData(fullRes.data);
       setLinks(linksRes.data);
       setComments(commentsRes.data);
       setActivity(activityRes.data);
+      setMeetingNotes(meetingNotesRes.data);
     } catch (e) {
       console.error('Failed to load initiative details', e);
     } finally {
@@ -226,23 +253,9 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
     setComments(prev => prev.filter(c => c.id !== commentId));
   };
 
-  return (
-    <>
-    <Drawer
-      anchor="right"
-      open={open}
-      onClose={onClose}
-      PaperProps={{
-        sx: {
-          width: { xs: '100vw', sm: 480 },
-          display: 'flex',
-          flexDirection: 'column',
-          borderLeft: '1px solid #e2e8f0',
-          boxShadow: '-4px 0 32px rgba(0,0,0,0.1)',
-        }
-      }}
-    >
-      {loading || !detail ? (
+  const handleClose = () => { if (pageMode) navigate(-1); else if (onClose) onClose(); };
+
+  const innerContent = loading || !detail ? (
         <Box display="flex" alignItems="center" justifyContent="center" flex={1}>
           <CircularProgress />
         </Box>
@@ -289,14 +302,23 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                 </Box>
               </Box>
               <Box display="flex" alignItems="center" gap={0.5}>
+                {!pageMode && (
+                  <Tooltip title="Open full page">
+                    <IconButton size="small" onClick={() => navigate(`/initiatives/${initiativeId}`)} sx={{ color: 'text.secondary' }}>
+                      <OpenInNew fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title="Share summary">
                   <IconButton size="small" onClick={() => setSummaryOpen(true)} sx={{ color: 'text.secondary' }}>
                     <IosShare fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <IconButton size="small" onClick={onClose} sx={{ mt: -0.25, mr: -0.5 }}>
-                  <Close fontSize="small" />
-                </IconButton>
+                <Tooltip title={pageMode ? 'Go back' : 'Close'}>
+                  <IconButton size="small" onClick={handleClose} sx={{ mt: -0.25, mr: -0.5 }}>
+                    {pageMode ? <ArrowBack fontSize="small" /> : <Close fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
               </Box>
             </Box>
 
@@ -340,11 +362,12 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
               </FormControl>
             </Box>
 
-            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 36, mb: -0.5 }}>
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ minHeight: 36, mb: -0.5 }}>
               <Tab icon={<Info sx={{ fontSize: 15 }} />} iconPosition="start" label="Overview" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<LinkIcon sx={{ fontSize: 15 }} />} iconPosition="start" label={`Links${links.length ? ` (${links.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<Comment sx={{ fontSize: 15 }} />} iconPosition="start" label={`Notes${comments.length ? ` (${comments.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<History sx={{ fontSize: 15 }} />} iconPosition="start" label="Activity" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
+              <Tab icon={<EventNote sx={{ fontSize: 15 }} />} iconPosition="start" label={`Meetings${meetingNotes.length ? ` (${meetingNotes.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
             </Tabs>
           </Box>
 
@@ -360,18 +383,28 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                   DESCRIPTION
                 </Typography>
                 {editingDesc ? (
-                  <TextField
-                    autoFocus
-                    fullWidth
-                    multiline
-                    rows={4}
-                    size="small"
-                    value={descDraft}
-                    onChange={e => setDescDraft(e.target.value)}
-                    onBlur={() => { saveField('description', descDraft); setEditingDesc(false); }}
-                    onKeyDown={e => { if (e.key === 'Escape') setEditingDesc(false); }}
-                    sx={{ mb: 2 }}
-                  />
+                  <Box sx={{ position: 'relative', mb: 2 }}>
+                    <TextField
+                      autoFocus
+                      fullWidth
+                      multiline
+                      rows={4}
+                      size="small"
+                      value={descDraft}
+                      onChange={e => setDescDraft(e.target.value)}
+                      onBlur={() => { saveField('description', descDraft); setEditingDesc(false); }}
+                      onKeyDown={e => { if (e.key === 'Escape') setEditingDesc(false); }}
+                    />
+                    <Box
+                      sx={{ position: 'absolute', bottom: 4, right: 4 }}
+                      onMouseDown={e => e.preventDefault()}
+                    >
+                      <RephraseTool
+                        text={descDraft}
+                        onApply={(v) => { setDescDraft(v); saveField('description', v); setEditingDesc(false); }}
+                      />
+                    </Box>
+                  </Box>
                 ) : (
                   <Typography
                     variant="body2"
@@ -826,10 +859,155 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
               </Box>
             </TabPanel>
 
+            {/* ── MEETING NOTES ── */}
+            <TabPanel value={tab} idx={4}>
+              <Box sx={{ px: 3, py: 2 }}>
+                {/* Tab header with Add button */}
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+                  <Typography variant="caption" fontWeight={700} color="text.disabled" letterSpacing={0.5} textTransform="uppercase">
+                    Linked Meetings
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<Add sx={{ fontSize: '14px !important' }} />}
+                    onClick={() => {
+                      setAddNoteSubject('');
+                      setAddNoteDate(new Date().toISOString().substring(0, 10));
+                      setAddNoteBody('');
+                      setAddNoteError(null);
+                      setAddNoteOpen(true);
+                    }}
+                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', borderColor: '#c7d2fe', color: '#6366f1', '&:hover': { bgcolor: '#f0f0ff' } }}
+                  >
+                    Add Note
+                  </Button>
+                </Box>
+                {meetingNotes.length === 0 ? (
+                  <Box textAlign="center" py={5}>
+                    <EventNote sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                    <Typography variant="body2" color="text.secondary">No meeting notes linked yet.</Typography>
+                    <Typography variant="caption" color="text.disabled">Add notes manually or save emails from the Meeting Notes page.</Typography>
+                  </Box>
+                ) : (
+                  <Box display="flex" flexDirection="column" gap={1.5}>
+                    {/* Summarize all button */}
+                    <Box display="flex" justifyContent="flex-end">
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={meetingSummaryLoading
+                          ? <CircularProgress size={13} sx={{ color: 'inherit' }} />
+                          : <AutoFixHigh sx={{ fontSize: '14px !important' }} />}
+                        disabled={meetingSummaryLoading}
+                        onClick={async () => {
+                          setMeetingSummaryLoading(true);
+                          setMeetingSummaryError(null);
+                          try {
+                            const res = await api.post('/ai/summarize-meetings', {
+                              initiativeTitle: detail?.title,
+                              notes: meetingNotes,
+                            });
+                            setMeetingSummaryText(res.data.summary);
+                            setMeetingSummaryOpen(true);
+                          } catch (e) {
+                            setMeetingSummaryError(e.response?.data?.error || 'Failed to summarize');
+                          } finally {
+                            setMeetingSummaryLoading(false);
+                          }
+                        }}
+                        sx={{ bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' }, borderRadius: 2, textTransform: 'none', fontWeight: 600, fontSize: '0.78rem' }}
+                      >
+                        {meetingSummaryLoading ? 'Summarizing…' : `Summarize All (${meetingNotes.length})`}
+                      </Button>
+                    </Box>
+                    {meetingSummaryError && (
+                      <Typography variant="caption" color="error.main" sx={{ px: 0.5 }}>{meetingSummaryError}</Typography>
+                    )}
+                    {meetingNotes.map(note => (
+                      <Box
+                        key={note.id}
+                        sx={{
+                          border: '1px solid #e2e8f0', borderRadius: 2, px: 2, py: 1.5,
+                          '&:hover': { bgcolor: '#f8fafc', borderColor: '#c7d2fe' },
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
+                          <Typography variant="body2" fontWeight={700} color="#1e293b" mb={0.4} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.subject}</Typography>
+                          <Tooltip title="Edit">
+                            <IconButton
+                              size="small"
+                              sx={{ flexShrink: 0, color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                              onClick={() => {
+                                setEditNote(note);
+                                setEditNoteSubject(note.subject || '');
+                                setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
+                                setEditNoteBody(note.body || '');
+                                setEditNoteError(null);
+                              }}
+                            >
+                              <Edit sx={{ fontSize: 14 }} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Box display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
+                          {note.fromEmail && (
+                            <Typography variant="caption" color="#6366f1" fontWeight={600} noWrap>{note.fromEmail}</Typography>
+                          )}
+                          {note.date && (
+                            <Typography variant="caption" color="text.disabled">
+                              {format(new Date(note.date), 'MMM d, yyyy')}
+                            </Typography>
+                          )}
+                          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+                            Saved {formatDistanceToNow(new Date(note.createdAt), { addSuffix: true })}
+                          </Typography>
+                        </Box>
+                        {note.body && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', mt: 0.75, lineHeight: 1.5 }}
+                          >
+                            {note.body}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            </TabPanel>
+
           </Box>
         </>
-      )}
-    </Drawer>
+      );
+
+  return (
+    <>
+    {pageMode ? (
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', bgcolor: 'background.paper', borderRadius: 2, border: '1px solid #e2e8f0' }}>
+        {innerContent}
+      </Box>
+    ) : (
+      <Drawer
+        anchor="right"
+        open={open}
+        onClose={handleClose}
+        PaperProps={{
+          sx: {
+            width: { xs: '100vw', sm: 480 },
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid #e2e8f0',
+            boxShadow: '-4px 0 32px rgba(0,0,0,0.1)',
+          }
+        }}
+      >
+        {innerContent}
+      </Drawer>
+    )}
 
     {/* Quick create user dialog */}
     <Dialog open={quickUserOpen} onClose={() => setQuickUserOpen(false)} maxWidth="xs" fullWidth>
@@ -879,6 +1057,192 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
       initiativeId={initiativeId}
       initiativeData={fullData || null}
     />
+
+    {/* Edit Meeting Note */}
+    <Dialog open={!!editNote} onClose={() => setEditNote(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Edit Meeting Note</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+        {editNoteError && (
+          <Typography variant="caption" color="error.main">{editNoteError}</Typography>
+        )}
+        <TextField
+          label="Title / Subject *"
+          size="small"
+          fullWidth
+          autoFocus
+          value={editNoteSubject}
+          onChange={e => setEditNoteSubject(e.target.value)}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <TextField
+          label="Date"
+          type="date"
+          size="small"
+          fullWidth
+          value={editNoteDate}
+          onChange={e => setEditNoteDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <Box sx={{ position: 'relative' }}>
+          <TextField
+            label="Notes"
+            size="small"
+            fullWidth
+            multiline
+            minRows={5}
+            maxRows={14}
+            value={editNoteBody}
+            onChange={e => setEditNoteBody(e.target.value)}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          />
+          <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
+            <RephraseTool text={editNoteBody} onApply={v => setEditNoteBody(v)} />
+          </Box>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" onClick={() => setEditNote(null)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!editNoteSubject.trim() || editNoteSaving}
+          onClick={async () => {
+            setEditNoteSaving(true);
+            setEditNoteError(null);
+            try {
+              const res = await api.patch(`/meeting-notes/${editNote.id}`, {
+                subject: editNoteSubject.trim(),
+                date:    editNoteDate || null,
+                body:    editNoteBody.trim(),
+              });
+              setMeetingNotes(prev => prev.map(n => n.id === editNote.id ? res.data : n));
+              setEditNote(null);
+            } catch (e) {
+              setEditNoteError(e.response?.data?.error || 'Failed to save');
+            } finally {
+              setEditNoteSaving(false);
+            }
+          }}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+        >
+          {editNoteSaving ? 'Saving…' : 'Save Changes'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* Add Meeting Note manually */}
+    <Dialog open={addNoteOpen} onClose={() => setAddNoteOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Add Meeting Note</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+        {addNoteError && (
+          <Typography variant="caption" color="error.main">{addNoteError}</Typography>
+        )}
+        <TextField
+          label="Title / Subject *"
+          size="small"
+          fullWidth
+          autoFocus
+          value={addNoteSubject}
+          onChange={e => setAddNoteSubject(e.target.value)}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <TextField
+          label="Date"
+          type="date"
+          size="small"
+          fullWidth
+          value={addNoteDate}
+          onChange={e => setAddNoteDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <Box sx={{ position: 'relative' }}>
+          <TextField
+            label="Notes"
+            size="small"
+            fullWidth
+            multiline
+            minRows={5}
+            maxRows={14}
+            placeholder="Paste or type meeting notes here…"
+            value={addNoteBody}
+            onChange={e => setAddNoteBody(e.target.value)}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          />
+          <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
+            <RephraseTool text={addNoteBody} onApply={v => setAddNoteBody(v)} />
+          </Box>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" onClick={() => setAddNoteOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!addNoteSubject.trim() || addNoteSaving}
+          onClick={async () => {
+            setAddNoteSaving(true);
+            setAddNoteError(null);
+            try {
+              const res = await api.post('/meeting-notes', {
+                subject:      addNoteSubject.trim(),
+                date:         addNoteDate || null,
+                body:         addNoteBody.trim(),
+                initiativeId: initiativeId,
+              });
+              setMeetingNotes(prev => [res.data, ...prev]);
+              setAddNoteOpen(false);
+            } catch (e) {
+              setAddNoteError(e.response?.data?.error || 'Failed to save note');
+            } finally {
+              setAddNoteSaving(false);
+            }
+          }}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+        >
+          {addNoteSaving ? 'Saving…' : 'Save Note'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* Meetings Summary Dialog */}
+    <Dialog open={meetingSummaryOpen} onClose={() => setMeetingSummaryOpen(false)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <AutoFixHigh sx={{ color: '#6366f1', fontSize: 20 }} />
+        Meetings Summary
+        <Typography variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>
+          {meetingNotes.length} meeting{meetingNotes.length !== 1 ? 's' : ''}
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ pt: '4px !important' }}>
+        <Box
+          sx={{
+            bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2,
+            px: 2.5, py: 2, whiteSpace: 'pre-wrap', fontFamily: 'inherit',
+            fontSize: '0.875rem', lineHeight: 1.7, color: '#1e293b', maxHeight: '60vh', overflowY: 'auto',
+          }}
+        >
+          {meetingSummaryText}
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+        <Button size="small" onClick={() => setMeetingSummaryOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Close</Button>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={meetingSummaryCopied ? <Done sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 14 }} />}
+          onClick={() => {
+            navigator.clipboard.writeText(meetingSummaryText);
+            setMeetingSummaryCopied(true);
+            setTimeout(() => setMeetingSummaryCopied(false), 2000);
+          }}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, borderColor: '#6366f1', color: '#6366f1' }}
+        >
+          {meetingSummaryCopied ? 'Copied!' : 'Copy'}
+        </Button>
+      </DialogActions>
+    </Dialog>
     </>
   );
 }

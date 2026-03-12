@@ -7,7 +7,7 @@ import {
 import {
   Dashboard as DashboardIcon, List as ListIcon, Logout, Menu as MenuIcon,
   AccountTree, CheckBox as TasksIcon, People as PeopleIcon,
-  Lightbulb as LightbulbIcon, NoteAlt, EventNote,
+  NoteAlt, EventNote,
   Settings as SettingsIcon, ChevronLeft, ChevronRight,
 } from '@mui/icons-material';
 import { useDispatch, useSelector } from 'react-redux';
@@ -52,7 +52,7 @@ export default function Layout() {
     { text: 'Initiatives',   icon: <ListIcon fontSize="small" />,        path: '/initiatives' },
     { text: 'Mind Map',      icon: <AccountTree fontSize="small" />,     path: '/mindmap' },
     { text: 'Tasks',         icon: <TasksIcon fontSize="small" />,       path: '/tasks' },
-    { text: 'Brainstorm',    icon: <LightbulbIcon fontSize="small" />,   path: '/brainstorm' },
+
     { text: 'Notes',         icon: <NoteAlt fontSize="small" />,         path: '/notes' },
     { text: 'Meeting Notes', icon: <EventNote fontSize="small" />,       path: '/meeting-notes' },
     { text: 'Users',         icon: <PeopleIcon fontSize="small" />,      path: '/users' },

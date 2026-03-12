@@ -13,6 +13,7 @@ import { format } from 'date-fns';
 import api from '../api/axios';
 import CanvasSelector from '../components/CanvasSelector';
 import { fetchCanvases } from '../features/canvas/canvasSlice';
+import RephraseTool from '../components/RephraseTool';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function timeAgo(iso) {
@@ -649,16 +650,24 @@ export default function Notes() {
               <Divider sx={{ mx: 3, my: 1.5 }} />
               {/* Body */}
               <Box sx={{ flex: 1, px: 3, pb: 3, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <TextField
-                  fullWidth multiline variant="standard" placeholder="Start writing…"
-                  value={editorNote.content} onChange={e => handleEditorChange('content', e.target.value)}
-                  minRows={8}
-                  InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem', lineHeight: 1.7, alignItems: 'flex-start' } }}
-                  sx={{
-                    '& .MuiInputBase-root': { alignItems: 'flex-start' },
-                    '& textarea': { resize: 'none' },
-                  }}
-                />
+                <Box sx={{ position: 'relative' }}>
+                  <TextField
+                    fullWidth multiline variant="standard" placeholder="Start writing…"
+                    value={editorNote.content} onChange={e => handleEditorChange('content', e.target.value)}
+                    minRows={8}
+                    InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem', lineHeight: 1.7, alignItems: 'flex-start' } }}
+                    sx={{
+                      '& .MuiInputBase-root': { alignItems: 'flex-start' },
+                      '& textarea': { resize: 'none' },
+                    }}
+                  />
+                  <Box sx={{ position: 'absolute', bottom: 2, right: 0 }}>
+                    <RephraseTool
+                      text={editorNote.content}
+                      onApply={v => handleEditorChange('content', v)}
+                    />
+                  </Box>
+                </Box>
                 {/* Sub-notes section */}
                 {(() => {
                   const children = allNotes.filter(n => n.parentId === editorNote.id);

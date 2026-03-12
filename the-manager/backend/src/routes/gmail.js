@@ -193,7 +193,26 @@ router.get('/meeting-notes', async (req, res, next) => {
           const parsed   = await simpleParser(msg.source);
           const from     = (parsed.from?.text || '').toLowerCase();
           const subject  = (parsed.subject   || '').toLowerCase();
-          const textBody = parsed.text || '';
+          // Prefer plain-text body; fall back to HTML stripped of tags
+          // (Gemini Notes and many modern emails are HTML-only)
+          const rawHtml  = parsed.html || '';
+          const textBody = parsed.text
+            || rawHtml
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<\/div>/gi, '\n')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/[ \t]+/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
 
           // Only apply text filter when NOT using a label (label itself is the filter)
           if (searchTerm && !from.includes(searchTerm) && !subject.includes(searchTerm)) {

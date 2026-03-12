@@ -39,6 +39,7 @@ model User {
   canvases Canvas[]
   brainstormCanvas BrainstormCanvas?
   notes Note[]
+  meetingNotes MeetingNote[]
   googleToken GoogleToken?
 
   @@map("users")
@@ -91,6 +92,7 @@ model Initiative {
   links       Link[]
   comments    Comment[]
   activityLogs ActivityLog[]
+  meetingNotes MeetingNote[]
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -244,4 +246,25 @@ model GoogleToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("google_tokens")
+}
+
+model MeetingNote {
+  id          String   @id @default(uuid())
+  subject     String
+  fromEmail   String?
+  date        DateTime?
+  body        String   @default("")
+
+  initiativeId String?
+  initiative   Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@index([createdById])
+  @@map("meeting_notes")
 }
