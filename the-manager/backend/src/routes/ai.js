@@ -542,9 +542,10 @@ ${body}`;
 }
 
 // POST /api/ai/summarize-meetings
+// Body: { initiativeTitle, notes, type? }  — type='newsletter' uses a newsletter-specific prompt
 router.post('/summarize-meetings', async (req, res, next) => {
   try {
-    const { initiativeTitle, notes } = req.body;
+    const { initiativeTitle, notes, type = 'meeting' } = req.body;
     if (!Array.isArray(notes) || notes.length === 0)
       return res.status(400).json({ error: 'notes array required' });
 
@@ -552,16 +553,35 @@ router.post('/summarize-meetings', async (req, res, next) => {
     const provider = settings.ai_provider || 'ollama';
     if (provider === 'disabled') return res.json({ summary: null, provider: 'disabled' });
 
+    const isNewsletter = type === 'newsletter';
+
     const notesText = notes.map((n, i) => {
       const header = [
         n.date ? `Date: ${new Date(n.date).toDateString()}` : null,
         n.subject ? `Subject: ${n.subject}` : null,
         n.fromEmail ? `From: ${n.fromEmail}` : null,
       ].filter(Boolean).join(' | ');
-      return `--- Meeting ${i + 1} ---\n${header}\n${(n.body || '').slice(0, 2000).trim()}`;
+      const label = isNewsletter ? `Newsletter ${i + 1}` : `Meeting ${i + 1}`;
+      return `--- ${label} ---\n${header}\n${(n.body || '').slice(0, 2000).trim()}`;
     }).join('\n\n');
 
-    const systemPrompt = `You are an expert meeting summarizer. Given a set of meeting notes all related to the same initiative, produce a concise consolidated summary.
+    const systemPrompt = isNewsletter
+      ? `You are an expert technology newsletter analyst. Given one or more AI/tech newsletter editions, produce a concise, insightful summary.
+Structure your response as:
+**Top Stories & Highlights**
+- bullet points of the most important news or announcements
+
+**Key Trends & Themes**
+- bullet points identifying recurring themes or important trends
+
+**Notable Tools / Models / Releases**
+- bullet points listing any new tools, models, products, or research papers mentioned
+
+**Key Takeaways**
+2-3 sentence narrative summarising what matters most.
+
+Be concise and specific. Use technical language where appropriate. Omit sections that have no relevant content.`
+      : `You are an expert meeting summarizer. Given a set of meeting notes all related to the same initiative, produce a concise consolidated summary.
 Structure your response as:
 **Key Decisions**
 - bullet points
@@ -577,7 +597,9 @@ Structure your response as:
 
 Be concise and factual. Omit sections that have no relevant content.`;
 
-    const userPrompt = `Initiative: ${initiativeTitle || 'Untitled'}\n\n${notesText}`;
+    const userPrompt = isNewsletter
+      ? `Summarize the following newsletter(s):\n\n${notesText}`
+      : `Initiative: ${initiativeTitle || 'Untitled'}\n\n${notesText}`;
 
     let rawText = null;
     let llmError = null;

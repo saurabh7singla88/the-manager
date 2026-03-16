@@ -16,7 +16,7 @@ import {
   IosShare, EventNote, ArrowBack, AutoFixHigh, ContentCopy, Done,
 } from '@mui/icons-material';
 import api from '../api/axios';
-import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives, fetchInitiatives } from '../features/initiatives/initiativesSlice';
+import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives } from '../features/initiatives/initiativesSlice';
 import { format, formatDistanceToNow } from 'date-fns';
 import InitiativeSummaryDialog from './InitiativeSummaryDialog';
 import RephraseTool from './RephraseTool';
@@ -177,19 +177,16 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
   const saveField = async (field, value) => {
     await dispatch(updateInitiative({ id: initiativeId, data: { [field]: value } }));
     dispatch(fetchAllInitiatives());
-    dispatch(fetchInitiatives({ parentId: 'null' }));
     setFullData(prev => prev ? { ...prev, [field]: value } : prev);
   };
 
   const handleStatusChange = async (status) => {
     await dispatch(updateStatus({ id: initiativeId, status }));
-    dispatch(fetchAllInitiatives());
     setFullData(prev => prev ? { ...prev, status } : prev);
   };
 
   const handlePriorityChange = async (priority) => {
     await dispatch(updatePriority({ id: initiativeId, priority }));
-    dispatch(fetchAllInitiatives());
     setFullData(prev => prev ? { ...prev, priority } : prev);
   };
 

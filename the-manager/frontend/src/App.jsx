@@ -11,6 +11,7 @@ import Users from './pages/Users';
 
 import Notes from './pages/Notes';
 import MeetingNotes from './pages/MeetingNotes';
+import AINewsletter from './pages/AINewsletter';
 import Setup from './pages/Setup';
 import Layout from './components/Layout';
 
@@ -31,6 +32,7 @@ function App() {
 
         <Route path="/notes" element={<Notes />} />
         <Route path="/meeting-notes" element={<MeetingNotes />} />
+        <Route path="/ai-newsletter" element={<AINewsletter />} />
         <Route path="/users" element={<Users />} />
         <Route path="/setup" element={<Setup />} />
       </Route>

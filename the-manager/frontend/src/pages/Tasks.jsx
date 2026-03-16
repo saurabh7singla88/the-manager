@@ -306,6 +306,7 @@ export default function Tasks() {
       {/* AI Task Priority Suggestions */}
       <AIPriorityStrip
         mode="tasks"
+        lazy
         limit={5}
         title="AI Task Priority Suggestions"
         onCardClick={id => { setDrawerTaskId(id); setDrawerOpen(true); }}

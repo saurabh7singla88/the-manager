@@ -14,7 +14,7 @@ import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutlin
 import { AISuggestionsButton } from '../components/AISuggestionsPanel';
 import { Avatar, AvatarGroup } from '@mui/material';
 import {
-  fetchInitiatives, createInitiative, updateInitiative,
+  fetchInitiatives, fetchAllInitiatives, createInitiative, updateInitiative,
   deleteInitiative, updateStatus, updatePriority
 } from '../features/initiatives/initiativesSlice';
 import { format } from 'date-fns';
@@ -76,7 +76,7 @@ export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { items, loading } = useSelector((state) => state.initiatives);
+  const { items, loading, allItems } = useSelector((state) => state.initiatives);
   const { activeCanvasId, canvases } = useSelector((state) => ({
     activeCanvasId: state.canvas.activeCanvasId.initiatives,
     canvases: state.canvas.canvases,
@@ -203,6 +203,10 @@ export default function InitiativesList() {
       ...(canvasId !== undefined && canvasId !== null ? { canvasId } : {}),
     }));
   }, [dispatch]);
+
+  useEffect(() => {
+    dispatch(fetchAllInitiatives());
+  }, [dispatch]); // eslint-disable-line
 
   useEffect(() => {
     doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
@@ -518,7 +522,18 @@ export default function InitiativesList() {
 
   return (
     <Box>
-      <CanvasSelector screen="initiatives" />
+      <CanvasSelector
+        screen="initiatives"
+        countsByCanvas={allItems.length > 0
+          ? Object.fromEntries(
+              canvases.map(c => [
+                c.id,
+                allItems.filter(i => !i.parentId && i.canvasId === c.id && i.status !== 'COMPLETED' && i.status !== 'CANCELLED').length,
+              ])
+            )
+          : undefined
+        }
+      />
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
         <Box>
           <Typography variant="h4" fontWeight={700}>Initiatives</Typography>

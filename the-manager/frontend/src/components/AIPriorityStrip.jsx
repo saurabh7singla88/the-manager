@@ -6,15 +6,19 @@
  *   title       – section heading text
  *   onCardClick – (id) => void  — called when a card is clicked
  *   canvasId    – optional canvas filter
+ *   lazy        – if true, don't auto-fetch; show a button instead (results cached for session)
  *   sx          – extra Box sx for the outer container
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Box, Typography, Chip, IconButton, Skeleton, Tooltip,
+  Box, Typography, Chip, IconButton, Skeleton, Tooltip, Button,
 } from '@mui/material';
 import { AutoAwesome, Refresh, FiberManualRecord, Settings } from '@mui/icons-material';
 import api from '../api/axios';
 import AISettingsDialog from './AISettingsDialog';
+
+// ── Session-level cache (lives as long as the tab/app is open) ──────────────
+const _cache = new Map(); // key: `${mode}:${canvasId ?? 'all'}` → data object
 
 const PROVIDER_BADGE = {
   ollama:            { label: '🦙 Ollama',   color: '#15803d', bg: '#f0fdf4', border: '#bbf7d0' },
@@ -38,21 +42,42 @@ export default function AIPriorityStrip({
   title,
   onCardClick,
   canvasId,
+  lazy = false,
   sx = {},
 }) {
-  const [state, setState] = useState({ loading: true, data: null, error: false });
+  const cacheKey = `${mode}:${canvasId ?? 'all'}`;
+  const cached = _cache.get(cacheKey);
+
+  const [state, setState] = useState(() => ({
+    loading: !lazy && !cached,   // auto-fetch → start loading; lazy + no cache → idle
+    data: cached ?? null,
+    error: false,
+    idle: lazy && !cached,       // true = waiting for user to click the button
+  }));
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const load = useCallback(() => {
-    setState(prev => ({ ...prev, loading: true, error: false }));
+  const load = useCallback((force = false) => {
+    setState(prev => ({ ...prev, loading: true, error: false, idle: false }));
     api.get('/ai/suggestions', { params: { limit, mode, ...(canvasId ? { canvasId } : {}) } })
-      .then(r => setState({ loading: false, data: r.data, error: false }))
-      .catch(() => setState({ loading: false, data: null, error: true }));
-  }, [mode, limit, canvasId]);
+      .then(r => {
+        _cache.set(cacheKey, r.data);
+        setState({ loading: false, data: r.data, error: false, idle: false });
+      })
+      .catch(() => setState(prev => ({ ...prev, loading: false, data: null, error: true, idle: false })));
+  }, [mode, limit, canvasId, cacheKey]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // Auto-fetch only when not lazy
+    if (!lazy && !cached) load();
+    // If canvasId changes and we have a stale cache entry for a different key → auto-load for non-lazy
+    else if (!lazy && cached) {
+      setState({ loading: false, data: cached, error: false, idle: false });
+    }
+  }, [lazy, load]); // eslint-disable-line
 
   const heading = title || (mode === 'tasks' ? '⚡ Task Priorities' : '🧠 AI Priority Suggestions');
+  const accentColor = mode === 'tasks' ? '#0369a1' : '#7c3aed';
+  const accentLight = mode === 'tasks' ? '#075985' : '#5b21b6';
 
   return (
     <Box
@@ -70,15 +95,11 @@ export default function AIPriorityStrip({
       <Box display="flex" alignItems="center" justifyContent="space-between"
         mb={state.loading || (state.data?.suggestions?.length > 0) ? 2 : 0}>
         <Box display="flex" alignItems="center" gap={1}>
-          <AutoAwesome sx={{ fontSize: 16, color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }} />
-          <Typography
-            variant="subtitle2"
-            fontWeight={700}
-            color={mode === 'tasks' ? '#075985' : '#5b21b6'}
-          >
+          <AutoAwesome sx={{ fontSize: 16, color: accentColor }} />
+          <Typography variant="subtitle2" fontWeight={700} color={accentLight}>
             {heading}
           </Typography>
-          {state.data?.llmUsed && (() => {
+          {state.data?.llmProvider && (() => {
             const badge = PROVIDER_BADGE[state.data.llmProvider] || PROVIDER_BADGE.ollama;
             return (
               <Chip
@@ -93,29 +114,52 @@ export default function AIPriorityStrip({
               {state.data.analysedCount} item{state.data.analysedCount !== 1 ? 's' : ''} analysed
             </Typography>
           )}
+          {state.data && !state.loading && cached && (
+            <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic', fontSize: '0.65rem' }}>
+              cached
+            </Typography>
+          )}
         </Box>
         <Box display="flex" alignItems="center" gap={0.25}>
           <Tooltip title="AI Settings">
-            <IconButton
-              size="small"
-              onClick={() => setSettingsOpen(true)}
-              sx={{ color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }}
-            >
+            <IconButton size="small" onClick={() => setSettingsOpen(true)} sx={{ color: accentColor }}>
               <Settings fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Refresh suggestions">
-            <IconButton
-              size="small"
-              onClick={load}
-              disabled={state.loading}
-              sx={{ color: mode === 'tasks' ? '#0369a1' : '#7c3aed' }}
-            >
-              <Refresh fontSize="small" />
-            </IconButton>
-          </Tooltip>
+          {!state.idle && (
+            <Tooltip title="Refresh suggestions">
+              <IconButton size="small" onClick={() => load(true)} disabled={state.loading} sx={{ color: accentColor }}>
+                <Refresh fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
+
+      {/* Idle state — lazy mode, no data yet → show button */}
+      {state.idle && (
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<AutoAwesome sx={{ fontSize: '1rem !important' }} />}
+          onClick={() => load()}
+          sx={{
+            borderColor: mode === 'tasks' ? '#7dd3fc' : '#a78bfa',
+            color: accentColor,
+            fontWeight: 600,
+            fontSize: '0.78rem',
+            borderRadius: 2,
+            px: 2,
+            py: 0.75,
+            '&:hover': {
+              borderColor: accentColor,
+              bgcolor: mode === 'tasks' ? '#e0f2fe' : '#f5f3ff',
+            },
+          }}
+        >
+          Run AI Analysis
+        </Button>
+      )}
 
       {/* Loading skeletons */}
       {state.loading && (
@@ -127,12 +171,12 @@ export default function AIPriorityStrip({
       )}
 
       {/* Error */}
-      {!state.loading && state.error && (
+      {!state.loading && !state.idle && state.error && (
         <Typography variant="body2" color="text.secondary">Could not load suggestions.</Typography>
       )}
 
       {/* Empty */}
-      {!state.loading && !state.error && state.data?.suggestions?.length === 0 && (
+      {!state.loading && !state.idle && !state.error && state.data?.suggestions?.length === 0 && (
         <Typography variant="body2" color="text.secondary">
           {mode === 'tasks' ? 'All tasks look on track — nothing urgent.' : 'All items look on track — no urgent items flagged.'}
         </Typography>
