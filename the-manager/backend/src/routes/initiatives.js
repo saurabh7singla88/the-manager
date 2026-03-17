@@ -314,6 +314,9 @@ router.put('/:id', async (req, res, next) => {
     if ('canvasId' in req.body) data.canvasId = req.body.canvasId || null;
     if ('linkedInitiativeId' in req.body) data.linkedInitiativeId = req.body.linkedInitiativeId || null;
     if ('isStandaloneTask' in req.body) data.isStandaloneTask = Boolean(req.body.isStandaloneTask);
+    if ('jiraTicketId' in req.body) data.jiraTicketId = req.body.jiraTicketId || null;
+    if ('jiraTicketUrl' in req.body) data.jiraTicketUrl = req.body.jiraTicketUrl || null;
+    if ('jiraTicketData' in req.body) data.jiraTicketData = req.body.jiraTicketData || null;
 
     if (assigneeIds !== undefined) {
       data.assignees = {

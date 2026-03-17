@@ -75,6 +75,9 @@ model Initiative {
   linkedInitiative    Initiative? @relation("TaskInitiativeLink", fields: [linkedInitiativeId], references: [id], onDelete: SetNull)
   linkedTasks         Initiative[] @relation("TaskInitiativeLink")
 
+  // External integrations (JIRA tickets, Confluence pages, etc.)
+  integrationItems IntegrationItem[]
+
   // Canvas
   canvasId    String?
   canvas      Canvas?  @relation(fields: [canvasId], references: [id])
@@ -233,6 +236,24 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+model IntegrationItem {
+  id           String   @id @default(uuid())
+  type         String   // JIRA | CONFLUENCE
+  key          String?  // JIRA: ticket key (e.g. PROJ-123); Confluence: page ID
+  url          String
+  title        String?
+  cachedData   String?  // JSON snapshot from API
+
+  initiativeId String
+  initiative   Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@map("integration_items")
 }
 
 model GoogleToken {

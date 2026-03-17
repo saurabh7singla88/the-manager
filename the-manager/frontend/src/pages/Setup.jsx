@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   SmartToy, Visibility, VisibilityOff, CheckCircle, Save,
-  Email, CheckCircleOutline, ErrorOutline, Launch,
+  Email, CheckCircleOutline, ErrorOutline, Launch, BugReport,
 } from '@mui/icons-material';
 import api from '../api/axios';
 
@@ -520,6 +520,125 @@ function GmailSection() {
 }
 
 
+// ─── JIRA Section ────────────────────────────────────────────────────────────
+function JiraSection() {
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [saved, setSaved]       = useState(false);
+  const [error, setError]       = useState('');
+  const [showToken, setShowToken] = useState(false);
+
+  const [form, setForm] = useState({ baseUrl: '', email: '', apiToken: '' });
+  const [tokenSet, setTokenSet] = useState(false);
+
+  useEffect(() => {
+    api.get('/jira/settings')
+      .then(r => {
+        setForm(f => ({ ...f, baseUrl: r.data.baseUrl || '', email: r.data.email || '' }));
+        setTokenSet(r.data.apiTokenSet);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = (field) => (e) => {
+    setForm(f => ({ ...f, [field]: e.target.value }));
+    setSaved(false);
+  };
+
+  const save = async () => {
+    if (!form.baseUrl.trim()) { setError('JIRA base URL is required.'); return; }
+    if (!form.email.trim()) { setError('Email is required.'); return; }
+    if (!form.apiToken.trim() && !tokenSet) { setError('API token is required.'); return; }
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      const r = await api.put('/jira/settings', form);
+      setSaved(true);
+      setTokenSet(r.data.apiTokenSet);
+      setForm(f => ({ ...f, apiToken: '' }));
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to save.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <Box display="flex" justifyContent="center" py={4}><CircularProgress size={28} /></Box>;
+
+  return (
+    <Box display="flex" flexDirection="column" gap={2.5}>
+      <Alert severity="info" sx={{ borderRadius: 2 }}>
+        Connect to your Atlassian instance to link <strong>JIRA tickets</strong> and <strong>Confluence pages</strong> with
+        initiatives. The same credentials cover both products. Supports Cloud (<em>company.atlassian.net</em>)
+        and Server/Data Center instances.
+      </Alert>
+
+      <TextField
+        label="JIRA Base URL"
+        size="small"
+        fullWidth
+        value={form.baseUrl}
+        onChange={set('baseUrl')}
+        placeholder="https://yourcompany.atlassian.net"
+        helperText="For JIRA Cloud: https://yourcompany.atlassian.net  |  For Server: https://jira.yourcompany.com"
+        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+      />
+
+      <TextField
+        label="Email / Username"
+        size="small"
+        fullWidth
+        value={form.email}
+        onChange={set('email')}
+        placeholder="you@company.com"
+        helperText="For JIRA Cloud: your Atlassian email. For Server: your JIRA username."
+        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+      />
+
+      <TextField
+        label="API Token"
+        type={showToken ? 'text' : 'password'}
+        size="small"
+        fullWidth
+        value={form.apiToken}
+        onChange={set('apiToken')}
+        placeholder={tokenSet ? 'Paste new token to replace…' : 'Your API token or PAT'}
+        helperText={
+          tokenSet
+            ? '✓ Token is saved'
+            : 'For JIRA Cloud: create at id.atlassian.com/manage-profile/security/api-tokens  |  For Server: create a PAT'
+        }
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end">
+              <IconButton size="small" onClick={() => setShowToken(v => !v)}>
+                {showToken ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+              </IconButton>
+            </InputAdornment>
+          ),
+        }}
+        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+      />
+
+      {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
+      {saved  && <Alert severity="success" icon={<CheckCircle />} sx={{ borderRadius: 2 }}>JIRA settings saved!</Alert>}
+
+      <Box display="flex" justifyContent="flex-end">
+        <Button
+          variant="contained"
+          onClick={save}
+          disabled={saving}
+          startIcon={saving ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <Save fontSize="small" />}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, px: 3 }}
+        >
+          {saving ? 'Saving…' : 'Save JIRA Settings'}
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
 // ─── Main Setup page ──────────────────────────────────────────────────────────
 export default function Setup() {
   return (
@@ -550,6 +669,15 @@ export default function Setup() {
         subtitle="Fetch meeting notes from a Gmail label and display them in the Meeting Notes page"
       >
         <GmailSection />
+      </Section>
+
+      {/* JIRA */}
+      <Section
+        icon={<BugReport sx={{ color: '#0052cc', fontSize: 22 }} />}
+        title="JIRA & Confluence Integration"
+        subtitle="Link JIRA tickets and Confluence pages to initiatives"
+      >
+        <JiraSection />
       </Section>
     </Box>
   );

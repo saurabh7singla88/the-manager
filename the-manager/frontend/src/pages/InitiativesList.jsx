@@ -10,7 +10,8 @@ import {
   Grid, CircularProgress, Divider, Tooltip, InputAdornment,
   Autocomplete
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare, Assessment } from '@mui/icons-material';
+import StatusReportDialog from '../components/StatusReportDialog';
 import { AISuggestionsButton } from '../components/AISuggestionsPanel';
 import { Avatar, AvatarGroup } from '@mui/material';
 import {
@@ -104,6 +105,9 @@ export default function InitiativesList() {
     [items]
   );
   const [loadingChildren, setLoadingChildren] = useState({});
+
+  // Status Report dialog
+  const [reportOpen, setReportOpen] = useState(false);
 
   // Detail drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -550,6 +554,15 @@ export default function InitiativesList() {
             Mind Map
           </Button>
           <AISuggestionsButton canvasId={activeCanvasId} />
+          <Tooltip title="Generate Status Report">
+            <Button
+              variant="outlined"
+              startIcon={<Assessment />}
+              onClick={() => setReportOpen(true)}
+            >
+              Status Report
+            </Button>
+          </Tooltip>
           <Button
             variant="contained"
             startIcon={<Add />}
@@ -900,6 +913,14 @@ export default function InitiativesList() {
         open={!!summaryId}
         initiativeId={summaryId}
         onClose={() => setSummaryId(null)}
+      />
+
+      {/* Status Report Dialog */}
+      <StatusReportDialog
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        activeCanvasId={activeCanvasId}
+        canvases={canvases}
       />
 
       {/* Quick create user dialog */}
