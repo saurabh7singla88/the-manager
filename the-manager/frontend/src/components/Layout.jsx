@@ -8,7 +8,7 @@ import {
   Dashboard as DashboardIcon, List as ListIcon, Logout, Menu as MenuIcon,
   AccountTree, CheckBox as TasksIcon, People as PeopleIcon,
   NoteAlt, EventNote, FeedOutlined,
-  Settings as SettingsIcon, ChevronLeft, ChevronRight,
+  Settings as SettingsIcon, ChevronLeft, ChevronRight, HelpOutline,
 } from '@mui/icons-material';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -58,6 +58,7 @@ export default function Layout() {
     { text: 'AI Newsletter',  icon: <FeedOutlined fontSize="small" />,    path: '/ai-newsletter' },
     { text: 'Users',         icon: <PeopleIcon fontSize="small" />,      path: '/users' },
     { text: 'Setup',         icon: <SettingsIcon fontSize="small" />,    path: '/setup' },
+    { text: 'Help',          icon: <HelpOutline fontSize="small" />,     path: '/help' },
   ];
 
   const initials = user?.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';

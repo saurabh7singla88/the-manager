@@ -14,7 +14,7 @@ import {
   History, Info, OpenInNew, Send, CheckCircle, Label,
   CalendarToday, Person, TrendingUp, PersonAdd,
   IosShare, EventNote, ArrowBack, AutoFixHigh, ContentCopy, Done,
-  BugReport, Refresh, LinkOff, AccountTree, ExpandMore, ExpandLess, Chat, DeleteSweep,
+  BugReport, Refresh, LinkOff, AccountTree, ExpandMore, ExpandLess, Chat, DeleteSweep, Visibility,
 } from '@mui/icons-material';
 import api from '../api/axios';
 import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives } from '../features/initiatives/initiativesSlice';
@@ -85,6 +85,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
   const [sendingComment, setSendingComment] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState(null);
   const [editingCommentText, setEditingCommentText] = useState('');
+  const [viewComment, setViewComment] = useState(null);
 
   // Activity state
   const [activity, setActivity] = useState([]);
@@ -110,6 +111,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
   const [editNoteBody, setEditNoteBody] = useState('');
   const [editNoteSaving, setEditNoteSaving] = useState(false);
   const [editNoteError, setEditNoteError] = useState(null);
+  const [viewNote, setViewNote] = useState(null);
 
   // Inline edit state
   const [editingTitle, setEditingTitle] = useState(false);
@@ -491,6 +493,228 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
 
   const handleClose = () => { if (pageMode) navigate(-1); else if (onClose) onClose(); };
 
+  // ── Render a single JIRA/Confluence integration item card ─────────────────
+  const renderIntItem = (item) => {
+    let data = null;
+    try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+    const isJira = item.type === 'JIRA';
+    const statusColor = (() => {
+      const cat = (data?.statusCategory || '').toLowerCase();
+      if (cat === 'done') return { color: '#065f46', bg: '#d1fae5' };
+      if (cat === 'in progress') return { color: '#1d4ed8', bg: '#dbeafe' };
+      return { color: '#475569', bg: '#f1f5f9' };
+    })();
+    const isSelected = selectedItemIds.has(item.id);
+    return (
+      <Box key={item.id} sx={{
+        p: 1.5, borderRadius: 2,
+        border: `1.5px solid ${isSelected ? '#a78bfa' : isJira ? '#dbeafe' : '#e0f2fe'}`,
+        bgcolor: isSelected ? '#fdf4ff' : isJira ? '#fafbff' : '#f0f9ff',
+        '&:hover': { borderColor: isSelected ? '#8b5cf6' : '#0052cc55', boxShadow: '0 1px 6px rgba(0,82,204,0.07)' },
+        transition: 'all 0.15s',
+      }}>
+        {/* Header row */}
+        <Box display="flex" alignItems="center" gap={0.75} mb={0.4}>
+          <Checkbox
+            size="small"
+            checked={isSelected}
+            onChange={() => setSelectedItemIds(prev => {
+              const n = new Set(prev);
+              if (n.has(item.id)) n.delete(item.id); else n.add(item.id);
+              return n;
+            })}
+            sx={{ p: 0.25, mr: -0.5, color: '#c4b5fd', '&.Mui-checked': { color: '#7c3aed' } }}
+          />
+          <Chip
+            label={isJira ? 'JIRA' : 'Confluence'}
+            size="small"
+            sx={{ height: 16, fontSize: '0.58rem', fontWeight: 700, border: 0, bgcolor: isJira ? '#0052cc' : '#0077b6', color: '#fff' }}
+          />
+          <Typography
+            variant="caption" component="a" href={item.url} target="_blank" rel="noopener noreferrer" fontWeight={700}
+            sx={{ color: '#0052cc', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+          >
+            {isJira ? item.key : (data?.spaceKey ? `${data.spaceKey} › ${item.key}` : item.key)}
+          </Typography>
+          <OpenInNew sx={{ fontSize: 10, color: '#0052cc' }} />
+          {isJira && data?.issueType && (
+            <Chip label={data.issueType} size="small"
+              sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+          )}
+          {isJira && data?.status && (
+            <Chip label={data.status} size="small"
+              sx={{ height: 15, fontSize: '0.58rem', bgcolor: statusColor.bg, color: statusColor.color, border: 0, ml: 'auto' }} />
+          )}
+          {!isJira && data?.space && (
+            <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto', fontSize: '0.62rem' }}>{data.space}</Typography>
+          )}
+          <Box display="flex" gap={0.25} sx={{ ml: isJira && data?.status ? 0 : 'auto' }}>
+            <Tooltip title={isJira ? (childrenMap[item.id] ? 'Reload child tickets' : 'Fetch child tickets') : (childrenMap[item.id] ? 'Reload child pages' : 'Fetch child pages')}>
+              <IconButton size="small" sx={{ p: 0.25, color: fetchingChildrenId === item.id ? '#7c3aed' : 'text.secondary' }}
+                onClick={() => handleFetchChildren(item)} disabled={fetchingChildrenId === item.id}>
+                {fetchingChildrenId === item.id ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} /> : <AccountTree sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="AI actions">
+              <IconButton size="small"
+                sx={{ p: 0.25, color: '#7c3aed', opacity: itemAiMap[item.id]?.loading ? 1 : 0.45, '&:hover': { opacity: 1 } }}
+                onClick={(e) => setAiMenuAnchor({ el: e.currentTarget, itemId: item.id })}
+                disabled={itemAiMap[item.id]?.loading}>
+                {itemAiMap[item.id]?.loading ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} /> : <AutoFixHigh sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Refresh">
+              <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary' }}
+                onClick={() => handleRefreshIntegration(item.id)} disabled={refreshingId === item.id}>
+                {refreshingId === item.id ? <CircularProgress size={11} /> : <Refresh sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Remove">
+              <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                onClick={() => handleRemoveIntegration(item.id)}>
+                <LinkOff sx={{ fontSize: 13 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* Title */}
+        <Typography variant="body2" fontWeight={600} mb={0.4} sx={{ color: '#1e293b', lineHeight: 1.3 }}>
+          {isJira ? data?.summary : data?.title}
+        </Typography>
+
+        {/* Description / Excerpt */}
+        {(isJira ? data?.description : data?.excerpt) && (
+          <Typography variant="caption" color="text.secondary"
+            sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
+            {isJira ? data.description : data.excerpt}
+          </Typography>
+        )}
+
+        {/* Meta row */}
+        <Box display="flex" flexWrap="wrap" gap={1} mt={0.5}>
+          {isJira && data?.priority && <Typography variant="caption" color="text.disabled">Priority: <b>{data.priority}</b></Typography>}
+          {isJira && data?.assignee && <Typography variant="caption" color="text.disabled">Assignee: <b>{data.assignee}</b></Typography>}
+          {!isJira && data?.version && <Typography variant="caption" color="text.disabled">v{data.version}</Typography>}
+          {(isJira ? data?.updated : data?.lastUpdated) && (
+            <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+              Updated {format(new Date(isJira ? data.updated : data.lastUpdated), 'MMM d, yyyy')}
+            </Typography>
+          )}
+        </Box>
+
+        {/* JIRA Labels */}
+        {isJira && data?.labels?.length > 0 && (
+          <Box display="flex" flexWrap="wrap" gap={0.5} mt={0.5}>
+            {data.labels.map(lbl => (
+              <Chip key={lbl} label={lbl} size="small"
+                sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#f1f5f9', color: 'text.secondary', border: 0 }} />
+            ))}
+          </Box>
+        )}
+
+        {/* Confluence breadcrumb */}
+        {!isJira && data?.ancestors?.length > 0 && (
+          <Typography variant="caption" color="text.disabled" display="block" mt={0.4} sx={{ fontSize: '0.62rem' }}>
+            {data.ancestors.join(' › ')}
+          </Typography>
+        )}
+
+        {/* Children */}
+        {childrenMap[item.id] !== undefined && (
+          <Box mt={0.75}>
+            <Box display="flex" alignItems="center" gap={0.5} sx={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => toggleExpandChildren(item.id)}>
+              {expandedChildren[item.id] ? <ExpandLess sx={{ fontSize: 13, color: 'text.secondary' }} /> : <ExpandMore sx={{ fontSize: 13, color: 'text.secondary' }} />}
+              <Typography variant="caption" fontWeight={600} color="text.secondary" sx={{ fontSize: '0.68rem' }}>
+                {childrenMap[item.id].length === 0
+                  ? (isJira ? 'No child tickets' : 'No child pages')
+                  : `${childrenMap[item.id].length} child ${isJira ? `ticket${childrenMap[item.id].length > 1 ? 's' : ''}` : `page${childrenMap[item.id].length > 1 ? 's' : ''}`}`}
+              </Typography>
+            </Box>
+            {expandedChildren[item.id] && childrenMap[item.id].length > 0 && (
+              <Box mt={0.5} pl={0.5} sx={{ borderLeft: `2px solid ${isJira ? '#dbeafe' : '#bae6fd'}` }}
+                display="flex" flexDirection="column" gap={0.5}>
+                {isJira ? childrenMap[item.id].map(child => {
+                  const childCat = (child.statusCategory || '').toLowerCase();
+                  const childStatusColor = childCat === 'done' ? { color: '#065f46', bg: '#d1fae5' }
+                    : childCat === 'in progress' ? { color: '#1d4ed8', bg: '#dbeafe' } : { color: '#475569', bg: '#f1f5f9' };
+                  return (
+                    <Box key={child.key} sx={{ pl: 1 }}>
+                      <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                        <Typography variant="caption" component="a" href={child.url}
+                          target="_blank" rel="noopener noreferrer" fontWeight={700}
+                          sx={{ color: '#0052cc', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                          {child.key}
+                        </Typography>
+                        {child.issueType && <Chip label={child.issueType} size="small" sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />}
+                        <Chip label={child.status || '?'} size="small"
+                          sx={{ height: 13, fontSize: '0.56rem', bgcolor: childStatusColor.bg, color: childStatusColor.color, border: 0 }} />
+                        {child.assignee && <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.62rem' }}>{child.assignee}</Typography>}
+                      </Box>
+                      {child.summary && (
+                        <Typography variant="caption" color="text.primary"
+                          sx={{ fontSize: '0.7rem', display: 'block', lineHeight: 1.35, mt: 0.1 }}>
+                          {child.summary}
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                }) : childrenMap[item.id].map(page => (
+                  <Box key={page.id} sx={{ pl: 1 }}>
+                    <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                      <Typography variant="caption" component="a" href={page.url}
+                        target="_blank" rel="noopener noreferrer" fontWeight={700}
+                        sx={{ color: '#0077b6', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                        {page.title}
+                      </Typography>
+                      {page.spaceKey && <Chip label={page.spaceKey} size="small" sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#e0f2fe', color: '#0077b6', border: 0 }} />}
+                    </Box>
+                    {page.excerpt && (
+                      <Typography variant="caption" color="text.secondary"
+                        sx={{ fontSize: '0.68rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.35, mt: 0.1 }}>
+                        {page.excerpt}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {/* Per-item AI result */}
+        {itemAiMap[item.id]?.open && (
+          <Box mt={1} sx={{ p: 1.25, borderRadius: 1.5, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.5}>
+              <Typography variant="caption" fontWeight={700} color="#7c3aed" sx={{ fontSize: '0.7rem' }}>
+                {AI_ACTIONS.find(a => a.value === itemAiMap[item.id]?.action)?.emoji || '✨'}{' '}
+                {itemAiMap[item.id]?.actionLabel || 'AI Result'}
+              </Typography>
+              <IconButton size="small" sx={{ p: 0.2 }}
+                onClick={() => setItemAiMap(prev => ({ ...prev, [item.id]: { ...prev[item.id], open: false } }))}>
+                <Close sx={{ fontSize: 12 }} />
+              </IconButton>
+            </Box>
+            {itemAiMap[item.id]?.loading && (
+              <Box display="flex" alignItems="center" gap={0.75}>
+                <CircularProgress size={12} sx={{ color: '#7c3aed' }} />
+                <Typography variant="caption" color="text.secondary">Running…</Typography>
+              </Box>
+            )}
+            {itemAiMap[item.id]?.error && <Typography variant="caption" color="error.main">{itemAiMap[item.id].error}</Typography>}
+            {itemAiMap[item.id]?.text && (
+              <Typography variant="caption" color="text.primary"
+                sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.75rem' }}>
+                {itemAiMap[item.id].text}
+              </Typography>
+            )}
+          </Box>
+        )}
+      </Box>
+    );
+  };
+
   const innerContent = loading || !detail ? (
         <Box display="flex" alignItems="center" justifyContent="center" flex={1}>
           <CircularProgress />
@@ -600,7 +824,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
 
             <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ minHeight: 36, mb: -0.5 }}>
               <Tab icon={<Info sx={{ fontSize: 15 }} />} iconPosition="start" label="Overview" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
-              <Tab icon={<LinkIcon sx={{ fontSize: 15 }} />} iconPosition="start" label={`Links${links.length ? ` (${links.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
+              <Tab icon={<LinkIcon sx={{ fontSize: 15 }} />} iconPosition="start" label={`Links${(links.length + integrationItems.length) ? ` (${links.length + integrationItems.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<Comment sx={{ fontSize: 15 }} />} iconPosition="start" label={`Notes${comments.length ? ` (${comments.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<History sx={{ fontSize: 15 }} />} iconPosition="start" label="Activity" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<EventNote sx={{ fontSize: 15 }} />} iconPosition="start" label={`Meetings${meetingNotes.length ? ` (${meetingNotes.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
@@ -837,8 +1061,8 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
 
                 </>
 
-                {/* ── JIRA & Confluence ── */}
-                <>
+                {/* JIRA & Confluence moved to the Links tab */}
+                {null && <>
                   <Divider sx={{ my: 2 }} />
                   <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
                     <Box display="flex" alignItems="center" gap={0.75}>
@@ -1421,7 +1645,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                       </MenuItem>
                     ))}
                   </Menu>
-                </>
+                </>}
 
                 {/* Created by */}
                 {detail.createdBy && (
@@ -1536,13 +1760,332 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                     </Box>
                   ))
                 )}
+
+                <Divider sx={{ my: 2.5 }} />
+
+                {/* ── JIRA & Confluence ── */}
+                <>
+                  {/* Top bar */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <BugReport sx={{ fontSize: 14, color: '#0052cc' }} />
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        JIRA &amp; CONFLUENCE
+                      </Typography>
+                      {integrationItems.length > 0 && (
+                        <Chip label={integrationItems.length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+                      )}
+                    </Box>
+                    {integrationItems.length > 0 && (
+                      <Tooltip title={chatOpen ? 'Close chat' : 'Chat with linked documents'}>
+                        <Button
+                          size="small"
+                          startIcon={<Chat sx={{ fontSize: '13px !important' }} />}
+                          onClick={() => setChatOpen(v => !v)}
+                          sx={{
+                            fontSize: '0.72rem', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0,
+                            color: chatOpen ? '#fff' : '#6366f1',
+                            bgcolor: chatOpen ? '#6366f1' : 'transparent',
+                            '&:hover': { bgcolor: chatOpen ? '#4f46e5' : '#eff6ff' },
+                          }}
+                        >
+                          Chat
+                        </Button>
+                      </Tooltip>
+                    )}
+                  </Box>
+
+                  {/* Selection toolbar */}
+                  {selectedItemIds.size > 0 && (
+                    <Box display="flex" alignItems="center" gap={1} mb={1.25} px={1} py={0.75}
+                      sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, border: '1px solid #bae6fd', flexWrap: 'wrap' }}>
+                      <Typography variant="caption" fontWeight={700} color="#0369a1" sx={{ flexShrink: 0 }}>
+                        {selectedItemIds.size} selected
+                      </Typography>
+                      <Select
+                        size="small"
+                        value={consolidatedAi.action}
+                        onChange={e => setConsolidatedAi(prev => ({ ...prev, action: e.target.value }))}
+                        sx={{ fontSize: '0.72rem', flex: 1, minWidth: 150, '& .MuiSelect-select': { py: 0.4, px: 1 } }}
+                      >
+                        {AI_ACTIONS.map(a => (
+                          <MenuItem key={a.value} value={a.value} sx={{ fontSize: '0.8rem', gap: 1 }}>
+                            {a.emoji} {a.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <Button
+                        size="small" variant="contained"
+                        onClick={handleConsolidatedAiAction}
+                        disabled={consolidatedAi.loading}
+                        sx={{ fontSize: '0.72rem', textTransform: 'none', flexShrink: 0, bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, py: 0.4 }}
+                      >
+                        {consolidatedAi.loading ? <CircularProgress size={12} sx={{ color: '#fff' }} /> : 'Run ✨'}
+                      </Button>
+                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setSelectedItemIds(new Set())}>
+                        <Close sx={{ fontSize: 13 }} />
+                      </IconButton>
+                    </Box>
+                  )}
+
+                  {/* Consolidated AI result */}
+                  {consolidatedAi.open && (
+                    <Box sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                        <Typography variant="caption" fontWeight={700} color="#7c3aed">
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.emoji || '✨'}{' '}
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.label || 'AI Result'}
+                          {selectedItemIds.size > 0 && ` — ${selectedItemIds.size} items`}
+                        </Typography>
+                        <IconButton size="small" sx={{ p: 0.25 }}
+                          onClick={() => setConsolidatedAi(prev => ({ ...prev, open: false }))}>
+                          <Close sx={{ fontSize: 13 }} />
+                        </IconButton>
+                      </Box>
+                      {consolidatedAi.loading && (
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <CircularProgress size={13} sx={{ color: '#7c3aed' }} />
+                          <Typography variant="caption" color="text.secondary">Running…</Typography>
+                        </Box>
+                      )}
+                      {consolidatedAi.error && <Typography variant="caption" color="error.main">{consolidatedAi.error}</Typography>}
+                      {consolidatedAi.text && (
+                        <Typography variant="caption" color="text.primary"
+                          sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.78rem' }}>
+                          {consolidatedAi.text}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* Chat panel */}
+                  {chatOpen && integrationItems.length > 0 && (
+                    <Box sx={{ mb: 1.5, borderRadius: 2, border: '1.5px solid #c7d2fe', bgcolor: '#fafbff', overflow: 'hidden' }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between"
+                        sx={{ px: 1.5, py: 0.75, bgcolor: '#6366f1', borderBottom: '1px solid #c7d2fe' }}>
+                        <Box display="flex" alignItems="center" gap={0.75}>
+                          <Chat sx={{ fontSize: 13, color: '#fff' }} />
+                          <Typography variant="caption" fontWeight={700} color="#fff" sx={{ fontSize: '0.72rem' }}>
+                            Chat —{' '}
+                            {selectedItemIds.size > 0
+                              ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                              : `all ${integrationItems.length} item${integrationItems.length > 1 ? 's' : ''}`}
+                          </Typography>
+                        </Box>
+                        <Box display="flex" alignItems="center">
+                          {chatMessages.length > 0 && (
+                            <Tooltip title="Clear conversation">
+                              <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                                onClick={() => { setChatMessages([]); setChatError(''); }}>
+                                <DeleteSweep sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                            onClick={() => setChatOpen(false)}>
+                            <Close sx={{ fontSize: 13 }} />
+                          </IconButton>
+                        </Box>
+                      </Box>
+                      <Box sx={{ px: 1.25, py: 1, maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {chatMessages.length === 0 && !chatSending && (
+                          <Box sx={{ textAlign: 'center', py: 2 }}>
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
+                              Ask anything about the{' '}
+                              {selectedItemIds.size > 0
+                                ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                                : `${integrationItems.length} linked item${integrationItems.length > 1 ? 's' : ''}`}…
+                            </Typography>
+                            <Box display="flex" flexWrap="wrap" gap={0.5} justifyContent="center" mt={1.25}>
+                              {['Summarize the current status', 'What are the blockers?', 'Who is working on what?', 'What should we do next?'].map(hint => (
+                                <Chip key={hint} label={hint} size="small"
+                                  onClick={() => setChatInput(hint)}
+                                  sx={{ fontSize: '0.66rem', height: 20, cursor: 'pointer', bgcolor: '#eff6ff', color: '#4f46e5', '&:hover': { bgcolor: '#e0e7ff' } }} />
+                              ))}
+                            </Box>
+                          </Box>
+                        )}
+                        {chatMessages.map((msg, idx) => (
+                          <Box key={idx} display="flex" justifyContent={msg.role === 'user' ? 'flex-end' : 'flex-start'}>
+                            <Box sx={{
+                              maxWidth: '88%', px: 1.25, py: 0.75,
+                              borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                              bgcolor: msg.role === 'user' ? '#6366f1' : '#f1f5f9',
+                              color: msg.role === 'user' ? '#fff' : 'text.primary',
+                            }}>
+                              <Typography variant="caption"
+                                sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.76rem' }}>
+                                {msg.content}
+                              </Typography>
+                            </Box>
+                          </Box>
+                        ))}
+                        {chatSending && (
+                          <Box display="flex" alignItems="center" gap={0.75} pl={0.5}>
+                            <CircularProgress size={11} sx={{ color: '#6366f1' }} />
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.72rem' }}>Thinking…</Typography>
+                          </Box>
+                        )}
+                        {chatError && (
+                          <Typography variant="caption" color="error.main" sx={{ px: 0.5, fontSize: '0.72rem' }}>{chatError}</Typography>
+                        )}
+                        <div ref={chatBottomRef} />
+                      </Box>
+                      <Box sx={{ px: 1.25, pb: 1.25, pt: 0.5, borderTop: '1px solid #e0e7ff' }}>
+                        <Box display="flex" gap={0.75} alignItems="flex-end">
+                          <TextField
+                            fullWidth size="small" multiline maxRows={4}
+                            placeholder="Ask about these documents… (Enter to send, Shift+Enter for newline)"
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChatMessage(); } }}
+                            disabled={chatSending}
+                            sx={{ '& textarea': { fontSize: '0.82rem' }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+                          />
+                          <Tooltip title="Send (Enter)">
+                            <span>
+                              <IconButton
+                                onClick={handleSendChatMessage}
+                                disabled={!chatInput.trim() || chatSending}
+                                sx={{ p: 1, mb: 0.1, flexShrink: 0, color: '#6366f1', '&:disabled': { color: 'text.disabled' } }}
+                              >
+                                <Send sx={{ fontSize: 18 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Add form */}
+                  {showIntForm && (
+                    <Box sx={{ p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', mb: 1.5 }}>
+                      <Box display="flex" gap={0.75} mb={1.25}>
+                        {['JIRA', 'CONFLUENCE'].map(t => (
+                          <Box
+                            key={t}
+                            onClick={() => { setIntAddType(t); setIntInput(''); setIntError(''); }}
+                            sx={{
+                              px: 1.25, py: 0.4, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+                              border: `1.5px solid ${intAddType === t ? '#0052cc' : '#e2e8f0'}`,
+                              bgcolor: intAddType === t ? '#eff6ff' : '#fff',
+                              color: intAddType === t ? '#0052cc' : 'text.secondary',
+                              transition: 'all 0.12s',
+                            }}
+                          >
+                            {t === 'JIRA' ? '🔵 JIRA Ticket' : '📄 Confluence Page'}
+                          </Box>
+                        ))}
+                      </Box>
+                      <Box display="flex" gap={1} alignItems="flex-start">
+                        <TextField
+                          autoFocus size="small"
+                          placeholder={intAddType === 'JIRA' ? 'e.g. PROJ-123' : 'Page URL or numeric page ID'}
+                          value={intInput}
+                          onChange={e => setIntInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handleAddIntegration(); if (e.key === 'Escape') setShowIntForm(false); }}
+                          sx={{ flex: 1, '& input': { fontSize: '0.82rem' } }}
+                          inputProps={intAddType === 'JIRA' ? { style: { textTransform: 'uppercase' } } : {}}
+                        />
+                        <Button size="small" variant="contained" onClick={handleAddIntegration}
+                          disabled={intAdding || !intInput.trim()}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          {intAdding ? <CircularProgress size={14} /> : 'Fetch & Link'}
+                        </Button>
+                        <Button size="small" variant="outlined"
+                          onClick={() => { setShowIntForm(false); setIntError(''); }}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          Cancel
+                        </Button>
+                      </Box>
+                      {intError && (
+                        <Typography variant="caption" color="error.main" display="block" mt={0.75}>{intError}</Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* ── JIRA Tickets ── */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75} mt={0.5}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <Typography variant="caption" fontWeight={700} sx={{ color: '#0052cc' }}>🔵 JIRA Tickets</Typography>
+                      {integrationItems.filter(i => i.type === 'JIRA').length > 0 && (
+                        <Chip label={integrationItems.filter(i => i.type === 'JIRA').length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#dbeafe', color: '#1d4ed8', border: 0 }} />
+                      )}
+                    </Box>
+                    <Button size="small" startIcon={<Add sx={{ fontSize: '13px !important' }} />}
+                      onClick={() => { setIntAddType('JIRA'); setShowIntForm(true); setIntError(''); setIntInput(''); }}
+                      sx={{ fontSize: '0.72rem', textTransform: 'none', color: '#0052cc', py: 0.25, px: 0.75, minWidth: 0 }}>
+                      Ticket
+                    </Button>
+                  </Box>
+                  {integrationItems.filter(i => i.type === 'JIRA').length === 0 && !showIntForm && (
+                    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+                      No JIRA tickets linked.
+                    </Typography>
+                  )}
+                  <Box display="flex" flexDirection="column" gap={1} mb={0.5}>
+                    {integrationItems.filter(i => i.type === 'JIRA').map(renderIntItem)}
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  {/* ── Confluence Pages ── */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <Typography variant="caption" fontWeight={700} sx={{ color: '#0077b6' }}>📄 Confluence Pages</Typography>
+                      {integrationItems.filter(i => i.type !== 'JIRA').length > 0 && (
+                        <Chip label={integrationItems.filter(i => i.type !== 'JIRA').length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#bae6fd', color: '#0077b6', border: 0 }} />
+                      )}
+                    </Box>
+                    <Button size="small" startIcon={<Add sx={{ fontSize: '13px !important' }} />}
+                      onClick={() => { setIntAddType('CONFLUENCE'); setShowIntForm(true); setIntError(''); setIntInput(''); }}
+                      sx={{ fontSize: '0.72rem', textTransform: 'none', color: '#0077b6', py: 0.25, px: 0.75, minWidth: 0 }}>
+                      Page
+                    </Button>
+                  </Box>
+                  {integrationItems.filter(i => i.type !== 'JIRA').length === 0 && !showIntForm && (
+                    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+                      No Confluence pages linked.
+                    </Typography>
+                  )}
+                  <Box display="flex" flexDirection="column" gap={1}>
+                    {integrationItems.filter(i => i.type !== 'JIRA').map(renderIntItem)}
+                  </Box>
+
+                  {/* AI actions dropdown menu */}
+                  <Menu
+                    anchorEl={aiMenuAnchor?.el}
+                    open={Boolean(aiMenuAnchor)}
+                    onClose={() => setAiMenuAnchor(null)}
+                    PaperProps={{ sx: { minWidth: 240, py: 0.5 } }}
+                  >
+                    {AI_ACTIONS.map(a => (
+                      <MenuItem
+                        key={a.value}
+                        sx={{ fontSize: '0.82rem', gap: 1, py: 0.75 }}
+                        onClick={() => {
+                          const target = integrationItems.find(i => i.id === aiMenuAnchor?.itemId);
+                          if (target) handleRunAiAction(target, a.value);
+                          setAiMenuAnchor(null);
+                        }}
+                      >
+                        <span style={{ width: 22, display: 'inline-block', textAlign: 'center', fontSize: '1rem' }}>{a.emoji}</span>
+                        {a.label}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </>
               </Box>
             </TabPanel>
 
             {/* ── COMMENTS ── */}
             <TabPanel value={tab} idx={2}>
               <Box sx={{ px: 3, py: 2.5, display: 'flex', flexDirection: 'column', height: '100%' }}>
-                {/* Comment list */}
+                {/* Comment list — minimised cards */}
                 <Box flex={1} mb={2}>
                   {comments.length === 0 ? (
                     <Box textAlign="center" py={4}>
@@ -1550,55 +2093,60 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                       <Typography variant="body2" color="text.disabled">No notes yet</Typography>
                     </Box>
                   ) : (
-                    comments.map(c => (
-                      <Box key={c.id} display="flex" gap={1.5} mb={2}>
-                        <Avatar sx={{ width: 28, height: 28, fontSize: '0.72rem', bgcolor: '#6366f1', flexShrink: 0 }}>
-                          {c.user?.name?.charAt(0) || '?'}
-                        </Avatar>
-                        <Box flex={1} minWidth={0}>
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Typography variant="caption" fontWeight={600}>{c.user?.name}</Typography>
-                            <Typography variant="caption" color="text.disabled">
-                              {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
-                            </Typography>
+                    <Box display="flex" flexDirection="column" gap={1}>
+                      {comments.map(c => (
+                        editingCommentId === c.id ? (
+                          <Box key={c.id} sx={{ p: 1.5, borderRadius: 2, border: '1.5px solid #c7d2fe', bgcolor: '#fafbff' }}>
+                            <Box display="flex" alignItems="center" gap={1} mb={1}>
+                              <Avatar sx={{ width: 24, height: 24, fontSize: '0.65rem', bgcolor: '#6366f1' }}>
+                                {c.user?.name?.charAt(0) || '?'}
+                              </Avatar>
+                              <Typography variant="caption" fontWeight={700}>{c.user?.name}</Typography>
+                            </Box>
+                            <TextField
+                              autoFocus fullWidth multiline size="small" value={editingCommentText}
+                              onChange={e => setEditingCommentText(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
+                              sx={{ mb: 0.75 }}
+                            />
+                            <Box display="flex" gap={0.75}>
+                              <Button size="small" variant="contained" sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+                                onClick={() => handleEditComment(c.id)}>Save</Button>
+                              <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
+                                onClick={() => setEditingCommentId(null)}>Cancel</Button>
+                            </Box>
                           </Box>
-                          {editingCommentId === c.id ? (
-                            <Box mt={0.5}>
-                              <TextField
-                                autoFocus fullWidth multiline size="small" value={editingCommentText}
-                                onChange={e => setEditingCommentText(e.target.value)}
-                                onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
-                                sx={{ mb: 0.75 }}
-                              />
-                              <Box display="flex" gap={0.75}>
-                                <Button size="small" variant="contained" onClick={() => handleEditComment(c.id)}>Save</Button>
-                                <Button size="small" variant="outlined" onClick={() => setEditingCommentId(null)}>Cancel</Button>
+                        ) : (
+                          <Box
+                            key={c.id}
+                            onClick={() => setViewComment(c)}
+                            sx={{
+                              display: 'flex', alignItems: 'flex-start', gap: 1.25,
+                              p: 1.25, borderRadius: 2, border: '1px solid #e2e8f0',
+                              cursor: 'pointer',
+                              '&:hover': { borderColor: '#c7d2fe', bgcolor: '#fafbff' },
+                              transition: 'all 0.13s',
+                            }}
+                          >
+                            <Avatar sx={{ width: 26, height: 26, fontSize: '0.68rem', bgcolor: '#6366f1', flexShrink: 0, mt: 0.1 }}>
+                              {c.user?.name?.charAt(0) || '?'}
+                            </Avatar>
+                            <Box flex={1} minWidth={0}>
+                              <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.3}>
+                                <Typography variant="caption" fontWeight={700} color="text.primary">{c.user?.name}</Typography>
+                                <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, ml: 1 }}>
+                                  {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
+                                </Typography>
                               </Box>
+                              <Typography variant="caption" color="text.secondary"
+                                sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
+                                {c.content}
+                              </Typography>
                             </Box>
-                          ) : (
-                            <Box
-                              sx={{
-                                mt: 0.25, p: 1.25, bgcolor: '#f8fafc', borderRadius: 2,
-                                border: '1px solid #f1f5f9', position: 'relative',
-                                '&:hover .comment-actions': { opacity: 1 },
-                              }}
-                            >
-                              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{c.content}</Typography>
-                              {c.user?.id === user?.id && (
-                                <Box className="comment-actions" sx={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.25 }}>
-                                  <IconButton size="small" sx={{ p: 0.25 }} onClick={() => { setEditingCommentId(c.id); setEditingCommentText(c.content); }}>
-                                    <Edit sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                  <IconButton size="small" sx={{ p: 0.25, color: 'error.main' }} onClick={() => handleDeleteComment(c.id)}>
-                                    <Delete sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Box>
-                              )}
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    ))
+                          </Box>
+                        )
+                      ))}
+                    </Box>
                   )}
                 </Box>
 
@@ -1610,7 +2158,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                     minRows={2}
                     maxRows={5}
                     size="small"
-                    placeholder="Add a note or comment…"
+                    placeholder="Add a note or comment… (Ctrl+Enter to send)"
                     value={commentText}
                     onChange={e => setCommentText(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSendComment(); }}
@@ -1757,21 +2305,32 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                       >
                         <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
                           <Typography variant="body2" fontWeight={700} color="#1e293b" mb={0.4} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.subject}</Typography>
-                          <Tooltip title="Edit">
-                            <IconButton
-                              size="small"
-                              sx={{ flexShrink: 0, color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
-                              onClick={() => {
-                                setEditNote(note);
-                                setEditNoteSubject(note.subject || '');
-                                setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
-                                setEditNoteBody(note.body || '');
-                                setEditNoteError(null);
-                              }}
-                            >
-                              <Edit sx={{ fontSize: 14 }} />
-                            </IconButton>
-                          </Tooltip>
+                          <Box display="flex" gap={0.25} sx={{ flexShrink: 0 }}>
+                            <Tooltip title="View note">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                onClick={() => setViewNote(note)}
+                              >
+                                <Visibility sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Edit">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                onClick={() => {
+                                  setEditNote(note);
+                                  setEditNoteSubject(note.subject || '');
+                                  setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
+                                  setEditNoteBody(note.body || '');
+                                  setEditNoteError(null);
+                                }}
+                              >
+                                <Edit sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
                         </Box>
                         <Box display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
                           {note.fromEmail && (
@@ -1880,6 +2439,42 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
       initiativeData={fullData || null}
     />
 
+    {/* View Comment */}
+    <Dialog open={!!viewComment} onClose={() => setViewComment(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 0.5 }}>
+        <Box display="flex" alignItems="center" gap={1.25}>
+          <Avatar sx={{ width: 28, height: 28, fontSize: '0.72rem', bgcolor: '#6366f1' }}>
+            {viewComment?.user?.name?.charAt(0) || '?'}
+          </Avatar>
+          <Box>
+            <Typography variant="subtitle2" fontWeight={700}>{viewComment?.user?.name}</Typography>
+            <Typography variant="caption" color="text.disabled">
+              {viewComment && formatDistanceToNow(new Date(viewComment.createdAt), { addSuffix: true })}
+            </Typography>
+          </Box>
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <Typography variant="body2" color="text.primary" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
+          {viewComment?.content}
+        </Typography>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
+          onClick={() => setViewComment(null)}>Close</Button>
+        {viewComment?.user?.id === user?.id && (
+          <Button size="small" variant="contained"
+            sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+            onClick={() => {
+              setEditingCommentId(viewComment.id);
+              setEditingCommentText(viewComment.content);
+              setViewComment(null);
+              setTab(2);
+            }}>Edit</Button>
+        )}
+      </DialogActions>
+    </Dialog>
+
     {/* Edit Meeting Note */}
     <Dialog open={!!editNote} onClose={() => setEditNote(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
       <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Edit Meeting Note</DialogTitle>
@@ -1949,6 +2544,50 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
         >
           {editNoteSaving ? 'Saving…' : 'Save Changes'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* View Meeting Note */}
+    <Dialog open={!!viewNote} onClose={() => setViewNote(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 0.5 }}>
+        {viewNote?.subject || 'Meeting Note'}
+      </DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <Box display="flex" flexWrap="wrap" gap={1.5} mb={2}>
+          {viewNote?.fromEmail && (
+            <Typography variant="caption" color="#6366f1" fontWeight={600}>{viewNote.fromEmail}</Typography>
+          )}
+          {viewNote?.date && (
+            <Typography variant="caption" color="text.disabled">
+              {format(new Date(viewNote.date), 'MMM d, yyyy')}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+            Saved {viewNote && formatDistanceToNow(new Date(viewNote.createdAt), { addSuffix: true })}
+          </Typography>
+        </Box>
+        {viewNote?.body ? (
+          <Typography variant="body2" color="text.primary" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
+            {viewNote.body}
+          </Typography>
+        ) : (
+          <Typography variant="body2" color="text.disabled" fontStyle="italic">No content.</Typography>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button variant="outlined" size="small" sx={{ borderRadius: 2, textTransform: 'none' }}
+          onClick={() => setViewNote(null)}>Close</Button>
+        <Button variant="contained" size="small"
+          sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+          onClick={() => {
+            setEditNote(viewNote);
+            setEditNoteSubject(viewNote.subject || '');
+            setEditNoteDate(viewNote.date ? viewNote.date.substring(0, 10) : '');
+            setEditNoteBody(viewNote.body || '');
+            setEditNoteError(null);
+            setViewNote(null);
+          }}>Edit
         </Button>
       </DialogActions>
     </Dialog>

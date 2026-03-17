@@ -13,6 +13,7 @@ import Notes from './pages/Notes';
 import MeetingNotes from './pages/MeetingNotes';
 import AINewsletter from './pages/AINewsletter';
 import Setup from './pages/Setup';
+import Help from './pages/Help';
 import Layout from './components/Layout';
 
 function App() {
@@ -35,6 +36,7 @@ function App() {
         <Route path="/ai-newsletter" element={<AINewsletter />} />
         <Route path="/users" element={<Users />} />
         <Route path="/setup" element={<Setup />} />
+        <Route path="/help" element={<Help />} />
       </Route>
     </Routes>
   );
