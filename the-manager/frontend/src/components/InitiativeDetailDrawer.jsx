@@ -21,6 +21,8 @@ import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives } f
 import { format, formatDistanceToNow } from 'date-fns';
 import InitiativeSummaryDialog from './InitiativeSummaryDialog';
 import RephraseTool from './RephraseTool';
+import RichEditor from './RichEditor';
+import RichText, { stripMarkdown } from './RichText';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9' },
@@ -94,9 +96,11 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
   const [meetingNotes, setMeetingNotes] = useState([]);
   const [meetingSummaryOpen, setMeetingSummaryOpen] = useState(false);
   const [meetingSummaryText, setMeetingSummaryText] = useState('');
+  const [meetingSummaryTitle, setMeetingSummaryTitle] = useState('');
   const [meetingSummaryLoading, setMeetingSummaryLoading] = useState(false);
   const [meetingSummaryError, setMeetingSummaryError] = useState(null);
   const [meetingSummaryCopied, setMeetingSummaryCopied] = useState(false);
+  const [summarizingNoteId, setSummarizingNoteId] = useState(null);
   // manual add meeting note
   const [addNoteOpen, setAddNoteOpen] = useState(false);
   const [addNoteSubject, setAddNoteSubject] = useState('');
@@ -2103,7 +2107,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               </Avatar>
                               <Typography variant="caption" fontWeight={700}>{c.user?.name}</Typography>
                             </Box>
-                            <TextField
+                            <RichEditor
                               autoFocus fullWidth multiline size="small" value={editingCommentText}
                               onChange={e => setEditingCommentText(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
@@ -2140,7 +2144,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               </Box>
                               <Typography variant="caption" color="text.secondary"
                                 sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
-                                {c.content}
+                                {stripMarkdown(c.content)}
                               </Typography>
                             </Box>
                           </Box>
@@ -2152,7 +2156,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
 
                 {/* New comment input */}
                 <Box sx={{ borderTop: '1px solid #f1f5f9', pt: 2 }}>
-                  <TextField
+                  <RichEditor
                     fullWidth
                     multiline
                     minRows={2}
@@ -2278,6 +2282,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               initiativeTitle: detail?.title,
                               notes: meetingNotes,
                             });
+                            setMeetingSummaryTitle(`All Meetings Summary (${meetingNotes.length})`);
                             setMeetingSummaryText(res.data.summary);
                             setMeetingSummaryOpen(true);
                           } catch (e) {
@@ -2306,6 +2311,34 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                         <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
                           <Typography variant="body2" fontWeight={700} color="#1e293b" mb={0.4} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.subject}</Typography>
                           <Box display="flex" gap={0.25} sx={{ flexShrink: 0 }}>
+                            <Tooltip title="Summarize this note">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                disabled={summarizingNoteId === note.id}
+                                onClick={async () => {
+                                  setSummarizingNoteId(note.id);
+                                  setMeetingSummaryError(null);
+                                  try {
+                                    const res = await api.post('/ai/summarize-meetings', {
+                                      initiativeTitle: detail?.title,
+                                      notes: [note],
+                                    });
+                                    setMeetingSummaryTitle(note.subject || 'Note Summary');
+                                    setMeetingSummaryText(res.data.summary);
+                                    setMeetingSummaryOpen(true);
+                                  } catch (e) {
+                                    setMeetingSummaryError(e.response?.data?.error || 'Failed to summarize');
+                                  } finally {
+                                    setSummarizingNoteId(null);
+                                  }
+                                }}
+                              >
+                                {summarizingNoteId === note.id
+                                  ? <CircularProgress size={12} />
+                                  : <AutoFixHigh sx={{ fontSize: 14 }} />}
+                              </IconButton>
+                            </Tooltip>
                             <Tooltip title="View note">
                               <IconButton
                                 size="small"
@@ -2455,9 +2488,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
         </Box>
       </DialogTitle>
       <DialogContent sx={{ pt: '8px !important' }}>
-        <Typography variant="body2" color="text.primary" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
-          {viewComment?.content}
-        </Typography>
+        <RichText text={viewComment?.content} />
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
         <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
@@ -2502,7 +2533,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
         />
         <Box sx={{ position: 'relative' }}>
-          <TextField
+          <RichEditor
             label="Notes"
             size="small"
             fullWidth
@@ -2511,7 +2542,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
             maxRows={14}
             value={editNoteBody}
             onChange={e => setEditNoteBody(e.target.value)}
-            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
           />
           <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
             <RephraseTool text={editNoteBody} onApply={v => setEditNoteBody(v)} />
@@ -2568,9 +2599,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           </Typography>
         </Box>
         {viewNote?.body ? (
-          <Typography variant="body2" color="text.primary" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
-            {viewNote.body}
-          </Typography>
+          <RichText text={viewNote.body} />
         ) : (
           <Typography variant="body2" color="text.disabled" fontStyle="italic">No content.</Typography>
         )}
@@ -2619,7 +2648,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
         />
         <Box sx={{ position: 'relative' }}>
-          <TextField
+          <RichEditor
             label="Notes"
             size="small"
             fullWidth
@@ -2629,7 +2658,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
             placeholder="Paste or type meeting notes here…"
             value={addNoteBody}
             onChange={e => setAddNoteBody(e.target.value)}
-            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
           />
           <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
             <RephraseTool text={addNoteBody} onApply={v => setAddNoteBody(v)} />
@@ -2671,10 +2700,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
     <Dialog open={meetingSummaryOpen} onClose={() => setMeetingSummaryOpen(false)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
       <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoFixHigh sx={{ color: '#6366f1', fontSize: 20 }} />
-        Meetings Summary
-        <Typography variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>
-          {meetingNotes.length} meeting{meetingNotes.length !== 1 ? 's' : ''}
-        </Typography>
+        {meetingSummaryTitle || 'Meeting Summary'}
       </DialogTitle>
       <DialogContent sx={{ pt: '4px !important' }}>
         <Box

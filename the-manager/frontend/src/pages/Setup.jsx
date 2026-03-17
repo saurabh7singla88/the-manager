@@ -21,9 +21,10 @@ const PROVIDERS = [
 
 const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'];
 const GEMINI_MODELS = [
-  'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro',
-  'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro',
-  'gemini-2.5-flash-preview-04-17', 'gemini-2.5-pro-preview-03-25',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro-preview-03-25',
+  'gemini-2.5-flash-preview-04-17',
   'gemini-3-flash-preview',
 ];
 const OLLAMA_DEFAULTS = ['llama3.1:latest', 'llama3.2:latest', 'mistral:latest', 'phi3:latest', 'gemma2:latest'];

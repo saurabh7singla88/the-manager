@@ -14,6 +14,7 @@ import api from '../api/axios';
 import CanvasSelector from '../components/CanvasSelector';
 import { fetchCanvases } from '../features/canvas/canvasSlice';
 import RephraseTool from '../components/RephraseTool';
+import RichEditor from '../components/RichEditor';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function timeAgo(iso) {
@@ -651,7 +652,7 @@ export default function Notes() {
               {/* Body */}
               <Box sx={{ flex: 1, px: 3, pb: 3, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <Box sx={{ position: 'relative' }}>
-                  <TextField
+                  <RichEditor
                     fullWidth multiline variant="standard" placeholder="Start writing…"
                     value={editorNote.content} onChange={e => handleEditorChange('content', e.target.value)}
                     minRows={8}
@@ -659,6 +660,8 @@ export default function Notes() {
                     sx={{
                       '& .MuiInputBase-root': { alignItems: 'flex-start' },
                       '& textarea': { resize: 'none' },
+                      '& .MuiOutlinedInput-root': { borderRadius: 0 },
+                      '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
                     }}
                   />
                   <Box sx={{ position: 'absolute', bottom: 2, right: 0 }}>
