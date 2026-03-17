@@ -110,9 +110,11 @@ export default function Tasks() {
     api.get('/initiatives', { params: { isStandaloneTask: 'true' } })
       .then(r => {
         const map = {};
-        r.data.forEach(t => {
-          if (t.canvasId) map[t.canvasId] = (map[t.canvasId] || 0) + 1;
-        });
+        r.data
+          .filter(t => t.status !== 'COMPLETED' && t.status !== 'CANCELLED')
+          .forEach(t => {
+            if (t.canvasId) map[t.canvasId] = (map[t.canvasId] || 0) + 1;
+          });
         setTaskCountsByCanvas(map);
       })
       .catch(() => {});

@@ -532,7 +532,13 @@ export default function InitiativesList() {
           ? Object.fromEntries(
               canvases.map(c => [
                 c.id,
-                allItems.filter(i => !i.parentId && i.canvasId === c.id && i.status !== 'COMPLETED' && i.status !== 'CANCELLED').length,
+                allItems.filter(i =>
+                  !i.parentId &&
+                  !i.isStandaloneTask &&
+                  i.canvasId === c.id &&
+                  i.status !== 'COMPLETED' &&
+                  i.status !== 'CANCELLED'
+                ).length,
               ])
             )
           : undefined
