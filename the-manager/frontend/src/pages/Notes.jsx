@@ -602,15 +602,15 @@ export default function Notes() {
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               {/* Toolbar */}
-              <Box sx={{ px: 3, py: 1.5, borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Box display="flex" alignItems="center" gap={0.5} sx={{ flex: 1 }}>
+              <Box sx={{ px: 3, py: 1.5, borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#fafafa' }}>
+                <Box display="flex" alignItems="center" gap={0.75} sx={{ flex: 1 }}>
                   {saveState === 'saving' && <><CircularProgress size={12} /><Typography variant="caption" color="text.disabled">Saving…</Typography></>}
                   {saveState === 'saved'  && <><CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} /><Typography variant="caption" color="text.disabled">Saved</Typography></>}
                   {saveState === 'error'  && <Typography variant="caption" color="error">Save failed</Typography>}
                 </Box>
                 <Tooltip title="Delete note (and all children)">
-                  <IconButton size="small" onClick={() => setDeleteConfirm(true)} sx={{ color: 'text.disabled', '&:hover': { color: '#dc2626' } }}>
-                    <Delete sx={{ fontSize: 18 }} />
+                  <IconButton size="small" onClick={() => setDeleteConfirm(true)} sx={{ color: 'text.disabled', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' }, borderRadius: 1.5 }}>
+                    <Delete sx={{ fontSize: 17 }} />
                   </IconButton>
                 </Tooltip>
               </Box>
@@ -642,9 +642,23 @@ export default function Notes() {
                 <TextField
                   fullWidth variant="standard" placeholder="Note title…"
                   value={editorNote.title} onChange={e => handleEditorChange('title', e.target.value)}
-                  InputProps={{ disableUnderline: true, sx: { fontSize: '1.5rem', fontWeight: 700, lineHeight: 1.3 } }}
+                  InputProps={{
+                    disableUnderline: true,
+                    sx: {
+                      fontSize: '1.65rem', fontWeight: 700, lineHeight: 1.3,
+                      letterSpacing: '-0.01em',
+                      '&:hover::after': { content: 'none' },
+                    },
+                  }}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      borderBottom: '2px solid transparent',
+                      transition: 'border-color 0.15s',
+                      '&.Mui-focused': { borderBottom: '2px solid #6366f1' },
+                    },
+                  }}
                 />
-                <Typography variant="caption" color="text.disabled" mt={0.5} display="block">
+                <Typography variant="caption" color="text.disabled" mt={0.75} display="block">
                   Last edited {format(new Date(editorNote.updatedAt), 'MMM d, yyyy · h:mm a')}
                 </Typography>
               </Box>
@@ -656,13 +670,8 @@ export default function Notes() {
                     fullWidth multiline variant="standard" placeholder="Start writing…"
                     value={editorNote.content} onChange={e => handleEditorChange('content', e.target.value)}
                     minRows={8}
-                    InputProps={{ disableUnderline: true, sx: { fontSize: '0.95rem', lineHeight: 1.7, alignItems: 'flex-start' } }}
-                    sx={{
-                      '& .MuiInputBase-root': { alignItems: 'flex-start' },
-                      '& textarea': { resize: 'none' },
-                      '& .MuiOutlinedInput-root': { borderRadius: 0 },
-                      '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
-                    }}
+                    InputProps={{ sx: { fontSize: '1rem', lineHeight: 1.8, alignItems: 'flex-start', px: 0 } }}
+                    sx={{ '& textarea': { resize: 'none' } }}
                   />
                   <Box sx={{ position: 'absolute', bottom: 2, right: 0 }}>
                     <RephraseTool

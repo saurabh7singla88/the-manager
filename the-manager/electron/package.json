@@ -11,7 +11,7 @@
     "build:frontend": "cd ../frontend && npm run build",
     "sign:mac": "codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac-arm64/The Manager.app' && codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac/The Manager.app' 2>/dev/null || true",
     "dmg:mac": "hdiutil create -volname 'The Manager' -srcfolder 'dist/mac-arm64/The Manager.app' -ov -format UDZO 'dist/The Manager-arm64-signed.dmg' && echo 'DMG rebuilt with signed app'",
-    "build:mac": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac && npm run sign:mac && npm run dmg:mac",
+    "build:mac": "cd ../backend && npx prisma generate && cd ../electron && npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac && npm run sign:mac && npm run dmg:mac",
     "build:win": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "build:win:installer": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=nsis"
   },

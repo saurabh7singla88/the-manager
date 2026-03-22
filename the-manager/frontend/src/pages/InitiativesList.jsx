@@ -10,7 +10,7 @@ import {
   Grid, CircularProgress, Divider, Tooltip, InputAdornment,
   Autocomplete
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare, Assessment } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare, Assessment, DragIndicator } from '@mui/icons-material';
 import StatusReportDialog from '../components/StatusReportDialog';
 import { AISuggestionsButton } from '../components/AISuggestionsPanel';
 import { Avatar, AvatarGroup } from '@mui/material';
@@ -21,6 +21,13 @@ import {
 import { format } from 'date-fns';
 import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
 import InitiativeSummaryDialog from '../components/InitiativeSummaryDialog';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -73,6 +80,35 @@ function getTimelineDate(key) {
   return d.toISOString().slice(0, 10);
 }
 
+// Sortable wrapper for root-level initiative rows (drag-and-drop)
+function SortableInitiativeItem({ id, children }) {
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id });
+  return (
+    <Box
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      sx={{ opacity: isDragging ? 0.5 : 1, display: 'flex', alignItems: 'flex-start', gap: 0.5 }}
+    >
+      <Tooltip title="Drag to reorder" placement="left">
+        <Box
+          {...attributes}
+          {...listeners}
+          sx={{
+            mt: 1.75, color: 'text.disabled', cursor: 'grab', flexShrink: 0, lineHeight: 0,
+            '&:active': { cursor: 'grabbing' },
+            '&:hover': { color: 'text.secondary' },
+          }}
+        >
+          <DragIndicator sx={{ fontSize: 18 }} />
+        </Box>
+      </Tooltip>
+      <Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+    </Box>
+  );
+}
+
 export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -115,6 +151,29 @@ export default function InitiativesList() {
 
   // Summary dialog
   const [summaryId, setSummaryId] = useState(null);
+
+  // Drag-and-drop ordering (root-level only)
+  const [orderedItems, setOrderedItems] = useState([]);
+  const reorderTimerRef = useRef(null);
+  useEffect(() => { setOrderedItems(items); }, [items]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+  const handleDragEnd = useCallback(({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    setOrderedItems(prev => {
+      const oldIdx = prev.findIndex(i => i.id === active.id);
+      const newIdx = prev.findIndex(i => i.id === over.id);
+      const reordered = arrayMove(prev, oldIdx, newIdx);
+      clearTimeout(reorderTimerRef.current);
+      reorderTimerRef.current = setTimeout(() => {
+        api.patch('/initiatives/reorder', {
+          items: reordered.map((item, idx) => ({ id: item.id, sortOrder: idx })),
+        }).catch(() => {});
+      }, 400);
+      return reordered;
+    });
+  }, []);
 
   // Auto-open drawer and expand ancestor chain when ?open=<id> is in the URL
   useEffect(() => {
@@ -654,7 +713,23 @@ export default function InitiativesList() {
           <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>Create Initiative</Button>
         </Box>
       ) : (
-        <Box>{items.map(initiative => renderInitiative(initiative))}</Box>
+        (() => {
+          const isDragEnabled = !searchText && !filterStatus && !filterPriority;
+          const listContent = isDragEnabled ? (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={orderedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
+                {orderedItems.map(initiative => (
+                  <SortableInitiativeItem key={initiative.id} id={initiative.id}>
+                    {renderInitiative(initiative)}
+                  </SortableInitiativeItem>
+                ))}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            orderedItems.map(initiative => renderInitiative(initiative))
+          );
+          return <Box>{listContent}</Box>;
+        })()
       )}
 
       {/* Create/Edit Dialog */}

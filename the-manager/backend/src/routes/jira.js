@@ -16,6 +16,36 @@ async function loadJiraSettings() {
   return map;
 }
 
+// ─── Validate Atlassian base URL (SSRF guard) ───────────────────────────────
+// Ensures the stored base URL is HTTPS and not pointing at a private/reserved address.
+function validateAtlassianBaseUrl(raw) {
+  let parsed;
+  try { parsed = new URL(raw); } catch {
+    throw Object.assign(new Error('Invalid JIRA base URL.'), { status: 400 });
+  }
+  if (parsed.protocol !== 'https:') {
+    throw Object.assign(new Error('JIRA base URL must use HTTPS.'), { status: 400 });
+  }
+  const host = parsed.hostname.toLowerCase();
+  const blocked = [
+    /^localhost$/,
+    /^127\./,                        // IPv4 loopback
+    /^::1$/,                         // IPv6 loopback
+    /^0\.0\.0\.0$/,
+    /^169\.254\./,                   // link-local / AWS IMDS
+    /^10\./,                         // RFC1918
+    /^172\.(1[6-9]|2\d|3[01])\./,   // RFC1918
+    /^192\.168\./,                   // RFC1918
+    /^fc00:/i,                        // IPv6 ULA
+    /^fe80:/i,                        // IPv6 link-local
+  ];
+  if (blocked.some(re => re.test(host))) {
+    throw Object.assign(new Error('JIRA base URL points to a private or reserved address.'), { status: 400 });
+  }
+  // Return normalized URL without trailing slash (preserving any path prefix)
+  return parsed.href.replace(/\/+$/, '');
+}
+
 // ─── GET /api/jira/settings ───────────────────────────────────────────────────
 router.get('/settings', async (req, res, next) => {
   try {
@@ -91,7 +121,7 @@ router.get('/fetch/:ticketKey', async (req, res, next) => {
       return res.status(400).json({ error: 'JIRA is not configured. Please set up JIRA credentials in Settings.' });
     }
 
-    const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+    const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
     const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
 
     const controller = new AbortController();
@@ -187,7 +217,7 @@ router.get('/confluence/fetch', async (req, res, next) => {
       return res.status(400).json({ error: 'JIRA/Confluence credentials are not configured. Set them up in Settings.' });
     }
 
-    const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+    const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
     const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
     const headers = { 'Authorization': `Basic ${credentials}`, 'Accept': 'application/json' };
 

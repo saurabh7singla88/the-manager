@@ -85,6 +85,9 @@ model Initiative {
   // Position for mind map view
   positionX   Float?
   positionY   Float?
+
+  // Manual sort order (drag-and-drop)
+  sortOrder   Int      @default(0)
   
   // Relations
   createdById String
@@ -103,6 +106,7 @@ model Initiative {
   @@index([parentId])
   @@index([status])
   @@index([priority])
+  @@index([sortOrder])
   @@index([createdById])
   @@index([canvasId])
   @@map("initiatives")

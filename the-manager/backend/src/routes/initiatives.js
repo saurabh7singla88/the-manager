@@ -86,12 +86,31 @@ router.get('/', async (req, res, next) => {
         }
       },
       orderBy: [
-        { priority: 'asc' },
+        { sortOrder: 'asc' },
         { createdAt: 'desc' }
       ]
     });
 
     res.json(initiatives);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Bulk reorder: PATCH /initiatives/reorder
+// Body: { items: [{ id, sortOrder }] }
+router.patch('/reorder', async (req, res, next) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array required' });
+    }
+    await Promise.all(
+      items.map(({ id, sortOrder }) =>
+        prisma.initiative.update({ where: { id }, data: { sortOrder } })
+      )
+    );
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -677,7 +696,7 @@ router.get('/:id/children', async (req, res, next) => {
         }
       },
       orderBy: [
-        { priority: 'asc' },
+        { sortOrder: 'asc' },
         { createdAt: 'desc' }
       ]
     });

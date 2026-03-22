@@ -294,6 +294,46 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
     setComments(prev => prev.filter(c => c.id !== commentId));
   };
 
+  // ── Meeting note save handlers ─────────────────────────────────────────────
+  const handleSaveEditNote = async () => {
+    if (!editNoteSubject.trim() || editNoteSaving || !editNote) return;
+    setEditNoteSaving(true);
+    setEditNoteError(null);
+    try {
+      const res = await api.patch(`/meeting-notes/${editNote.id}`, {
+        subject: editNoteSubject.trim(),
+        date:    editNoteDate || null,
+        body:    editNoteBody.trim(),
+      });
+      setMeetingNotes(prev => prev.map(n => n.id === editNote.id ? res.data : n));
+      setEditNote(null);
+    } catch (e) {
+      setEditNoteError(e.response?.data?.error || 'Failed to save');
+    } finally {
+      setEditNoteSaving(false);
+    }
+  };
+
+  const handleSaveAddNote = async () => {
+    if (!addNoteSubject.trim() || addNoteSaving) return;
+    setAddNoteSaving(true);
+    setAddNoteError(null);
+    try {
+      const res = await api.post('/meeting-notes', {
+        subject:      addNoteSubject.trim(),
+        date:         addNoteDate || null,
+        body:         addNoteBody.trim(),
+        initiativeId: initiativeId,
+      });
+      setMeetingNotes(prev => [res.data, ...prev]);
+      setAddNoteOpen(false);
+    } catch (e) {
+      setAddNoteError(e.response?.data?.error || 'Failed to save note');
+    } finally {
+      setAddNoteSaving(false);
+    }
+  };
+
   // ── Integrations (JIRA + Confluence) ──────────────────────────────────────────────
   const handleAddIntegration = async () => {
     if (!intInput.trim()) return;
@@ -2107,12 +2147,14 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               </Avatar>
                               <Typography variant="caption" fontWeight={700}>{c.user?.name}</Typography>
                             </Box>
-                            <RichEditor
-                              autoFocus fullWidth multiline size="small" value={editingCommentText}
-                              onChange={e => setEditingCommentText(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
-                              sx={{ mb: 0.75 }}
-                            />
+                            <Box sx={{ mb: 1.5 }}>
+                              <RichEditor
+                                autoFocus fullWidth multiline size="small" value={editingCommentText}
+                                onChange={e => setEditingCommentText(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
+                                onSubmit={() => handleEditComment(c.id)}
+                              />
+                            </Box>
                             <Box display="flex" gap={0.75}>
                               <Button size="small" variant="contained" sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
                                 onClick={() => handleEditComment(c.id)}>Save</Button>
@@ -2363,6 +2405,20 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                                 <Edit sx={{ fontSize: 14 }} />
                               </IconButton>
                             </Tooltip>
+                            <Tooltip title="Remove from this initiative">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#dc2626' }, p: 0.25 }}
+                                onClick={async () => {
+                                  try {
+                                    await api.patch(`/meeting-notes/${note.id}`, { initiativeId: null });
+                                    setMeetingNotes(prev => prev.filter(n => n.id !== note.id));
+                                  } catch (e) { console.error(e); }
+                                }}
+                              >
+                                <LinkOff sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
                           </Box>
                         </Box>
                         <Box display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
@@ -2542,6 +2598,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
             maxRows={14}
             value={editNoteBody}
             onChange={e => setEditNoteBody(e.target.value)}
+            onSubmit={handleSaveEditNote}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
           />
           <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
@@ -2555,23 +2612,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           size="small"
           variant="contained"
           disabled={!editNoteSubject.trim() || editNoteSaving}
-          onClick={async () => {
-            setEditNoteSaving(true);
-            setEditNoteError(null);
-            try {
-              const res = await api.patch(`/meeting-notes/${editNote.id}`, {
-                subject: editNoteSubject.trim(),
-                date:    editNoteDate || null,
-                body:    editNoteBody.trim(),
-              });
-              setMeetingNotes(prev => prev.map(n => n.id === editNote.id ? res.data : n));
-              setEditNote(null);
-            } catch (e) {
-              setEditNoteError(e.response?.data?.error || 'Failed to save');
-            } finally {
-              setEditNoteSaving(false);
-            }
-          }}
+          onClick={handleSaveEditNote}
           sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
         >
           {editNoteSaving ? 'Saving…' : 'Save Changes'}
@@ -2658,6 +2699,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
             placeholder="Paste or type meeting notes here…"
             value={addNoteBody}
             onChange={e => setAddNoteBody(e.target.value)}
+            onSubmit={handleSaveAddNote}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
           />
           <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
@@ -2671,24 +2713,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
           size="small"
           variant="contained"
           disabled={!addNoteSubject.trim() || addNoteSaving}
-          onClick={async () => {
-            setAddNoteSaving(true);
-            setAddNoteError(null);
-            try {
-              const res = await api.post('/meeting-notes', {
-                subject:      addNoteSubject.trim(),
-                date:         addNoteDate || null,
-                body:         addNoteBody.trim(),
-                initiativeId: initiativeId,
-              });
-              setMeetingNotes(prev => [res.data, ...prev]);
-              setAddNoteOpen(false);
-            } catch (e) {
-              setAddNoteError(e.response?.data?.error || 'Failed to save note');
-            } finally {
-              setAddNoteSaving(false);
-            }
-          }}
+          onClick={handleSaveAddNote}
           sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
         >
           {addNoteSaving ? 'Saving…' : 'Save Note'}

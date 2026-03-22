@@ -16,9 +16,39 @@ async function loadAtlassianSettings() {
   return map;
 }
 
-// ─── Helpers to fetch from JIRA / Confluence ─────────────────────────────────
+// ─── Validate Atlassian base URL (SSRF guard) ───────────────────────────────
+// Ensures the stored base URL is HTTPS and not pointing at a private/reserved address.
+function validateAtlassianBaseUrl(raw) {
+  let parsed;
+  try { parsed = new URL(raw); } catch {
+    throw Object.assign(new Error('Invalid JIRA base URL.'), { status: 400 });
+  }
+  if (parsed.protocol !== 'https:') {
+    throw Object.assign(new Error('JIRA base URL must use HTTPS.'), { status: 400 });
+  }
+  const host = parsed.hostname.toLowerCase();
+  const blocked = [
+    /^localhost$/,
+    /^127\./,                        // IPv4 loopback
+    /^::1$/,                         // IPv6 loopback
+    /^0\.0\.0\.0$/,
+    /^169\.254\./,                   // link-local / AWS IMDS
+    /^10\./,                         // RFC1918
+    /^172\.(1[6-9]|2\d|3[01])\./,   // RFC1918
+    /^192\.168\./,                   // RFC1918
+    /^fc00:/i,                        // IPv6 ULA
+    /^fe80:/i,                        // IPv6 link-local
+  ];
+  if (blocked.some(re => re.test(host))) {
+    throw Object.assign(new Error('JIRA base URL points to a private or reserved address.'), { status: 400 });
+  }
+  // Return normalized URL without trailing slash (preserving any path prefix)
+  return parsed.href.replace(/\/+$/, '');
+}
+
+// ─── Helpers to fetch from JIRA / Confluence ────────────────────────────────────────
 async function fetchJiraTicket(settings, ticketKey) {
-  const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+  const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
   const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
 
   const controller = new AbortController();
@@ -66,7 +96,7 @@ async function fetchJiraTicket(settings, ticketKey) {
 }
 
 async function fetchConfluencePage(settings, pageId) {
-  const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+  const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
   const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
   const headers = { 'Authorization': `Basic ${credentials}`, 'Accept': 'application/json' };
 
@@ -215,7 +245,7 @@ router.get('/:id/children', async (req, res, next) => {
       return res.status(400).json({ error: 'JIRA credentials not configured.' });
     }
 
-    const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+    const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
     const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
     const headers = { 'Authorization': `Basic ${credentials}`, 'Accept': 'application/json' };
 
@@ -275,36 +305,34 @@ router.get('/:id/children', async (req, res, next) => {
         }
       }
 
-      // From subtasks field on the parent
+      // From subtasks field on the parent — fetch missing ones in parallel (capped at 20)
       if (issueRes.ok) {
         const issueData = await issueRes.json();
         const subtasks = issueData.fields?.subtasks || [];
-        for (const sub of subtasks) {
-          if (!childrenSet.has(sub.key)) {
-            // Sub only has minimal fields here — fetch full details
-            try {
-              const subRes = await fetch(
-                `${baseUrl}/rest/api/3/issue/${encodeURIComponent(sub.key)}?fields=summary,status,priority,assignee,issuetype,updated,description`,
-                { headers }
-              );
-              if (subRes.ok) {
-                const subData = await subRes.json();
-                const f = subData.fields || {};
-                childrenSet.set(sub.key, {
-                  key:         subData.key,
-                  url:         `${baseUrl}/browse/${subData.key}`,
-                  summary:     f.summary || '',
-                  description: extractDescription(f.description),
-                  status:      f.status?.name || '',
-                  statusCategory: f.status?.statusCategory?.name || '',
-                  priority:    f.priority?.name || '',
-                  issueType:   f.issuetype?.name || '',
-                  assignee:    f.assignee?.displayName || null,
-                  updated:     f.updated || null,
-                });
-              }
-            } catch { /* skip individual fetch failures */ }
-          }
+        const missingKeys = subtasks.map(s => s.key).filter(k => !childrenSet.has(k)).slice(0, 20);
+        const subResults = await Promise.all(
+          missingKeys.map(key =>
+            fetch(
+              `${baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,priority,assignee,issuetype,updated,description`,
+              { headers, signal: controller.signal }
+            ).then(r => r.ok ? r.json() : null).catch(() => null)
+          )
+        );
+        for (const subData of subResults) {
+          if (!subData) continue;
+          const f = subData.fields || {};
+          childrenSet.set(subData.key, {
+            key:         subData.key,
+            url:         `${baseUrl}/browse/${subData.key}`,
+            summary:     f.summary || '',
+            description: extractDescription(f.description),
+            status:      f.status?.name || '',
+            statusCategory: f.status?.statusCategory?.name || '',
+            priority:    f.priority?.name || '',
+            issueType:   f.issuetype?.name || '',
+            assignee:    f.assignee?.displayName || null,
+            updated:     f.updated || null,
+          });
         }
       }
 
@@ -333,7 +361,7 @@ router.get('/:id/confluence-children', async (req, res, next) => {
       return res.status(400).json({ error: 'Confluence credentials not configured.' });
     }
 
-    const baseUrl = settings['jira_base_url'].replace(/\/$/, '');
+    const baseUrl = validateAtlassianBaseUrl(settings['jira_base_url']);
     const credentials = Buffer.from(`${settings['jira_email']}:${settings['jira_api_token']}`).toString('base64');
     const headers = { 'Authorization': `Basic ${credentials}`, 'Accept': 'application/json' };
 
