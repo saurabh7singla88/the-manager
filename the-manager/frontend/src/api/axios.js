@@ -35,8 +35,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      // Hash-compatible redirect — works with HashRouter in Electron file://
-      window.location.hash = '/login';
+      // Reload the page so Redux re-initialises from empty localStorage.
+      // Simply setting window.location.hash = '/login' won't work because
+      // the in-memory Redux state still has isAuthenticated:true, causing an
+      // immediate redirect back to '/' before the login page can render.
+      window.location.reload();
       return Promise.reject(error);
     }
 
