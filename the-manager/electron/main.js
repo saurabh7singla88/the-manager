@@ -28,7 +28,7 @@ const userDataPath = app.getPath('userData');
 
 process.env.ELECTRON       = 'true';
 process.env.DATABASE_URL   = `file:${path.join(userDataPath, 'app.db')}`;
-process.env.PORT            = '3001';
+process.env.PORT            = '47421';
 process.env.NODE_ENV        = isDev ? 'development' : 'production';
 process.env.ALLOWED_ORIGINS = isDev ? 'http://localhost:5173' : 'file://';
 
@@ -62,7 +62,7 @@ async function runMigrations() {
 let _httpServer = null;
 
 async function startBackend() {
-  const port = parseInt(process.env.PORT || '3001', 10);
+  const port = parseInt(process.env.PORT || '47421', 10);
 
   // Skip if port already in use (another instance or dev server)
   const inUse = await new Promise(resolve => {

@@ -99,6 +99,7 @@ router.get('/', async (req, res) => {
       select: {
         id: true,
         title: true,
+        isProtected: true,
         parentId: true,
         canvasId: true,
         createdAt: true,
@@ -147,9 +148,11 @@ router.get('/:id', async (req, res) => {
   try {
     const note = await prisma.note.findFirst({
       where: { id: req.params.id, createdById: req.user.id },
-      select: { id: true, title: true, content: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
     });
     if (!note) return res.status(404).json({ error: 'Note not found' });
+    // Protected notes: omit content until verified via POST /:id/unlock
+    if (note.isProtected) return res.json({ ...note, content: null });
     res.json(note);
   } catch (err) {
     console.error(err);
@@ -157,10 +160,36 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ── Unlock note — verify login password, return full content ──────────────
+router.post('/:id/unlock', async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ error: 'Password required' });
+
+    const [note, user] = await Promise.all([
+      prisma.note.findFirst({
+        where: { id: req.params.id, createdById: req.user.id },
+        select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
+      }),
+      prisma.user.findUnique({ where: { id: req.user.id }, select: { password: true } }),
+    ]);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    if (!note.isProtected) return res.json(note);
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Incorrect password' });
+
+    res.json(note);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to unlock note' });
+  }
+});
+
 // ── Update note ────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
   try {
-    const { title, content, canvasId, parentId } = req.body;
+    const { title, content, canvasId, parentId, isProtected } = req.body;
     const note = await prisma.note.findFirst({ where: { id: req.params.id, createdById: req.user.id } });
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
@@ -169,11 +198,12 @@ router.put('/:id', async (req, res) => {
     if (content !== undefined) data.content = content;
     if (canvasId !== undefined) data.canvasId = canvasId || null;
     if (parentId !== undefined) data.parentId = parentId || null;
+    if (isProtected !== undefined) data.isProtected = isProtected;
 
     const updated = await prisma.note.update({
       where: { id: req.params.id },
       data,
-      select: { id: true, title: true, content: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
     });
     res.json(updated);
   } catch (err) {

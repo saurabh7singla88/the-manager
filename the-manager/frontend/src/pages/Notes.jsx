@@ -188,7 +188,57 @@ function UnlockScreen({ onUnlocked }) {
     </Box>
   );
 }
+// ── Per-note unlock dialog ──────────────────────────────────────────────
+function NoteUnlockDialog({ note, open, onClose, onUnlocked }) {
+  const [pw, setPw] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (open) { setPw(''); setError(''); }
+  }, [open]);
+
+  const submit = async () => {
+    if (!pw || !note) return;
+    setLoading(true);
+    setError('');
+    try {
+      const r = await api.post(`/notes/${note.id}/unlock`, { password: pw });
+      onUnlocked(r.data);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Incorrect password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Lock sx={{ color: '#6366f1', fontSize: 20 }} /> Unlock note
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Typography variant="body2" color="text.secondary" mb={2}>
+          “{note?.title}” is protected. Enter your login password to open it.
+        </Typography>
+        <TextField
+          autoFocus fullWidth type="password" label="Password" size="small"
+          value={pw} onChange={e => { setPw(e.target.value); setError(''); }}
+          error={!!error} helperText={error || ''}
+          inputProps={{ autoComplete: 'off' }}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        />
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button onClick={onClose} variant="outlined">Cancel</Button>
+        <Button onClick={submit} variant="contained" disabled={loading || !pw}
+          startIcon={loading ? <CircularProgress size={16} /> : <LockOpen />}>
+          Unlock
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 // ── NoteTreeItem — renders one node and its children recursively ───────────────
 function NoteTreeItem({ note, depth, selectedId, onSelect, onAddChild, expandedIds, onToggle, canvases }) {
   const isExpanded = expandedIds.has(note.id);
@@ -225,19 +275,22 @@ function NoteTreeItem({ note, depth, selectedId, onSelect, onAddChild, expandedI
         </Box>
 
         {/* Title + meta */}
-        <Box sx={{ flex: 1, overflow: 'hidden', pl: 0.25 }}>
-          <Typography
-            variant="body2"
-            fontWeight={active ? 700 : depth === 0 ? 600 : 500}
-            sx={{
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              color: active ? '#4f46e5' : 'text.primary',
-              fontSize: depth === 0 ? '0.875rem' : `${Math.max(0.78, 0.875 - depth * 0.025)}rem`,
-              lineHeight: 1.4,
-            }}
-          >
-            {note.title}
-          </Typography>
+        <Box sx={{ flex: 1, overflow: 'hidden', pl: 0.25, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography
+              variant="body2"
+              fontWeight={active ? 700 : depth === 0 ? 600 : 500}
+              sx={{
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                color: active ? '#4f46e5' : 'text.primary',
+                fontSize: depth === 0 ? '0.875rem' : `${Math.max(0.78, 0.875 - depth * 0.025)}rem`,
+                lineHeight: 1.4, flex: 1, minWidth: 0,
+              }}
+            >
+              {note.title}
+            </Typography>
+            {note.isProtected && <Lock sx={{ fontSize: 11, color: active ? '#a5b4fc' : '#94a3b8', flexShrink: 0 }} />}
+          </Box>
           {depth === 0 && (
             <Box display="flex" alignItems="center" gap={0.75} mt={0.15} flexWrap="wrap">
               <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.65rem' }}>
@@ -288,6 +341,10 @@ export default function Notes() {
   const [hasPassword, setHasPassword] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pwMgmtOpen, setPwMgmtOpen] = useState(false);
+
+  // Per-note lock state
+  const [unlockTarget, setUnlockTarget] = useState(null);
+  const [unlockedNoteIds, setUnlockedNoteIds] = useState(() => new Set());
 
   // Flat list of all user notes (includes parentId)
   const [allNotes, setAllNotes] = useState([]);
@@ -379,6 +436,10 @@ export default function Notes() {
 
   // ── Open note ──────────────────────────────────────────────────────────────
   const openNote = useCallback(async (note) => {
+    if (note.isProtected && !unlockedNoteIds.has(note.id)) {
+      setUnlockTarget(note);
+      return;
+    }
     setSelectedId(note.id);
     setSaveState('saved');
     expandAncestors(note.id, allNotes);
@@ -386,7 +447,7 @@ export default function Notes() {
       const r = await api.get(`/notes/${note.id}`);
       setEditorNote(r.data);
     } catch (e) { console.error(e); }
-  }, [allNotes, expandAncestors]);
+  }, [allNotes, expandAncestors, unlockedNoteIds]);
 
   // ── Create note (root when parentId=null, child otherwise) ─────────────────
   const handleCreate = useCallback(async (parentId = null) => {
@@ -443,7 +504,28 @@ export default function Notes() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => persistSave(editorNote.id, { [field]: value }), 1000);
   }, [editorNote, persistSave]);
+  // ── Per-note lock ───────────────────────────────────────────────────────
+  const handleNoteUnlocked = useCallback((fullNote) => {
+    setUnlockedNoteIds(prev => { const s = new Set(prev); s.add(fullNote.id); return s; });
+    setUnlockTarget(null);
+    setSelectedId(fullNote.id);
+    setSaveState('saved');
+    expandAncestors(fullNote.id, allNotes);
+    setEditorNote(fullNote);
+  }, [allNotes, expandAncestors]);
 
+  const handleToggleLock = useCallback(async () => {
+    if (!editorNote) return;
+    const newProtected = !editorNote.isProtected;
+    try {
+      const r = await api.put(`/notes/${editorNote.id}`, { isProtected: newProtected });
+      setEditorNote(prev => ({ ...prev, isProtected: r.data.isProtected }));
+      setAllNotes(prev => prev.map(n => n.id === editorNote.id ? { ...n, isProtected: r.data.isProtected } : n));
+      if (newProtected) {
+        setUnlockedNoteIds(prev => { const s = new Set(prev); s.delete(editorNote.id); return s; });
+      }
+    } catch (e) { console.error(e); }
+  }, [editorNote]);
   // ── Delete ─────────────────────────────────────────────────────────────────
   const handleDelete = async () => {
     if (!editorNote) return;
@@ -483,19 +565,6 @@ export default function Notes() {
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
               <Typography fontWeight={700} variant="subtitle1">Notes</Typography>
               <Box display="flex" gap={0.5}>
-                <Tooltip title={hasPassword ? 'Password settings' : 'Set a password'}>
-                  <IconButton size="small" onClick={() => setPwMgmtOpen(true)}
-                    sx={{ color: hasPassword ? '#6366f1' : 'text.disabled' }}>
-                    {hasPassword ? <Lock sx={{ fontSize: 16 }} /> : <LockOpen sx={{ fontSize: 16 }} />}
-                  </IconButton>
-                </Tooltip>
-                {hasPassword && isUnlocked && (
-                  <Tooltip title="Lock notes">
-                    <IconButton size="small" onClick={() => setIsUnlocked(false)} sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' } }}>
-                      <LockOutlined sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                )}
                 <Button size="small" variant="contained"
                   startIcon={creating ? <CircularProgress size={14} /> : <Add />}
                   onClick={() => handleCreate(null)} disabled={creating || !isUnlocked}
@@ -608,6 +677,12 @@ export default function Notes() {
                   {saveState === 'saved'  && <><CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} /><Typography variant="caption" color="text.disabled">Saved</Typography></>}
                   {saveState === 'error'  && <Typography variant="caption" color="error">Save failed</Typography>}
                 </Box>
+                <Tooltip title={editorNote.isProtected ? 'Remove protection' : 'Lock note (uses login password)'}>
+                  <IconButton size="small" onClick={handleToggleLock}
+                    sx={{ color: editorNote.isProtected ? '#6366f1' : 'text.disabled', '&:hover': { color: '#6366f1', bgcolor: '#f0f4ff' }, borderRadius: 1.5 }}>
+                    {editorNote.isProtected ? <Lock sx={{ fontSize: 17 }} /> : <LockOpen sx={{ fontSize: 17 }} />}
+                  </IconButton>
+                </Tooltip>
                 <Tooltip title="Delete note (and all children)">
                   <IconButton size="small" onClick={() => setDeleteConfirm(true)} sx={{ color: 'text.disabled', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' }, borderRadius: 1.5 }}>
                     <Delete sx={{ fontSize: 17 }} />
@@ -746,6 +821,14 @@ export default function Notes() {
         open={pwMgmtOpen} hasPassword={hasPassword}
         onClose={() => setPwMgmtOpen(false)}
         onSuccess={handlePwSuccess}
+      />
+
+      {/* Per-note unlock */}
+      <NoteUnlockDialog
+        note={unlockTarget}
+        open={!!unlockTarget}
+        onClose={() => setUnlockTarget(null)}
+        onUnlocked={handleNoteUnlocked}
       />
 
       {/* Delete confirm */}

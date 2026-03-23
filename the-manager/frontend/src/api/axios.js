@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:47421/api';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -51,7 +51,7 @@ api.interceptors.response.use(
         _reloadScheduled = true;
         const checkInterval = setInterval(async () => {
           try {
-            await fetch('http://localhost:3001/api/health', { signal: AbortSignal.timeout(2000) });
+            await fetch('http://localhost:47421/api/health', { signal: AbortSignal.timeout(2000) });
             // Backend is back — reload to restore full app state
             clearInterval(checkInterval);
             window.location.reload();

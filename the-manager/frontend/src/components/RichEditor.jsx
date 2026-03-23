@@ -169,17 +169,30 @@ export default function RichEditor({ value = '', onChange, onKeyDown: externalOn
               const ss = el.selectionStart;
               const lineStart = value.lastIndexOf('\n', ss - 1) + 1;
               const currentLine = value.slice(lineStart, ss);
-              const bulletMatch = currentLine.match(/^(-\s)(.*)/);
-              const numberedMatch = currentLine.match(/^(\d+)\.\s(.*)/);
+              // Match indented bullets and numbered items (industry standard: preserve indent level)
+              const bulletMatch = currentLine.match(/^(\s*)(- )(.*)/);
+              const numberedMatch = currentLine.match(/^(\s*)(\d+)\.\s(.*)/);
               if (bulletMatch) {
-                if (bulletMatch[2].trim() === '') {
-                  e.preventDefault();
-                  const newValue = value.slice(0, lineStart) + '\n' + value.slice(ss);
-                  onChange({ target: { value: newValue } });
-                  requestAnimationFrame(() => { el.focus(); el.setSelectionRange(lineStart + 1, lineStart + 1); });
+                const indent = bulletMatch[1];
+                const content = bulletMatch[3];
+                e.preventDefault();
+                if (content.trim() === '') {
+                  if (indent.length > 0) {
+                    // Dedent one level on empty indented bullet (like Word/Notion)
+                    const newIndent = indent.slice(3);
+                    const newLine = newIndent + '- ';
+                    const newValue = value.slice(0, lineStart) + newLine + value.slice(ss);
+                    const newPos = lineStart + newLine.length;
+                    onChange({ target: { value: newValue } });
+                    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(newPos, newPos); });
+                  } else {
+                    // Top-level empty bullet → exit list
+                    const newValue = value.slice(0, lineStart) + '\n' + value.slice(ss);
+                    onChange({ target: { value: newValue } });
+                    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(lineStart + 1, lineStart + 1); });
+                  }
                 } else {
-                  e.preventDefault();
-                  const insert = '\n- ';
+                  const insert = '\n' + indent + '- ';
                   const newValue = value.slice(0, ss) + insert + value.slice(ss);
                   const newPos = ss + insert.length;
                   onChange({ target: { value: newValue } });
@@ -188,15 +201,33 @@ export default function RichEditor({ value = '', onChange, onKeyDown: externalOn
                 return;
               }
               if (numberedMatch) {
-                if (numberedMatch[2].trim() === '') {
-                  e.preventDefault();
-                  const newValue = value.slice(0, lineStart) + '\n' + value.slice(ss);
-                  onChange({ target: { value: newValue } });
-                  requestAnimationFrame(() => { el.focus(); el.setSelectionRange(lineStart + 1, lineStart + 1); });
+                const indent = numberedMatch[1];
+                const num = parseInt(numberedMatch[2], 10);
+                const content = numberedMatch[3];
+                e.preventDefault();
+                if (content.trim() === '') {
+                  if (indent.length > 0) {
+                    // Dedent one level on empty indented item — continue parent numbering
+                    const newIndent = indent.slice(3);
+                    const prevLines = value.slice(0, lineStart).split('\n');
+                    let nextNum = 1;
+                    for (let i = prevLines.length - 1; i >= 0; i--) {
+                      const m = prevLines[i].match(/^(\s*)(\d+)\.\s/);
+                      if (m && m[1] === newIndent) { nextNum = parseInt(m[2], 10) + 1; break; }
+                    }
+                    const newLine = newIndent + nextNum + '. ';
+                    const newValue = value.slice(0, lineStart) + newLine + value.slice(ss);
+                    const newPos = lineStart + newLine.length;
+                    onChange({ target: { value: newValue } });
+                    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(newPos, newPos); });
+                  } else {
+                    // Top-level empty number → exit list
+                    const newValue = value.slice(0, lineStart) + '\n' + value.slice(ss);
+                    onChange({ target: { value: newValue } });
+                    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(lineStart + 1, lineStart + 1); });
+                  }
                 } else {
-                  e.preventDefault();
-                  const nextNum = parseInt(numberedMatch[1], 10) + 1;
-                  const insert = `\n${nextNum}. `;
+                  const insert = '\n' + indent + (num + 1) + '. ';
                   const newValue = value.slice(0, ss) + insert + value.slice(ss);
                   const newPos = ss + insert.length;
                   onChange({ target: { value: newValue } });
@@ -204,6 +235,51 @@ export default function RichEditor({ value = '', onChange, onKeyDown: externalOn
                 }
                 return;
               }
+            }
+            if (e.key === 'Tab') {
+              e.preventDefault();
+              const el = inputRef.current;
+              if (!el) return;
+              const ss = el.selectionStart;
+              const lineStart = value.lastIndexOf('\n', ss - 1) + 1;
+              const lineEnd = value.indexOf('\n', ss);
+              const lineEndActual = lineEnd === -1 ? value.length : lineEnd;
+              const currentLine = value.slice(lineStart, lineEndActual);
+
+              if (/^(\s*)(- |\d+\.\s)/.test(currentLine)) {
+                let newLine;
+                if (e.shiftKey) {
+                  const dedented = currentLine.replace(/^   /, '');
+                  if (dedented === currentLine) return;
+                  newLine = dedented;
+                } else {
+                  newLine = '   ' + currentLine;
+                }
+                // If numbered, renumber to match position at the new indent level
+                const numMatch = newLine.match(/^(\s*)(\d+)\.\s(.*)$/);
+                if (numMatch) {
+                  const newIndent = numMatch[1];
+                  const prevLines = value.slice(0, lineStart).split('\n');
+                  let nextNum = 1;
+                  for (let i = prevLines.length - 1; i >= 0; i--) {
+                    const m = prevLines[i].match(/^(\s*)(\d+)\.\s/);
+                    if (m && m[1] === newIndent) { nextNum = parseInt(m[2], 10) + 1; break; }
+                  }
+                  newLine = newIndent + nextNum + '. ' + numMatch[3];
+                }
+                const indentDelta = e.shiftKey ? -3 : 3;
+                const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEndActual);
+                const newPos = Math.max(lineStart, Math.min(ss + indentDelta, lineStart + newLine.length));
+                onChange({ target: { value: newValue } });
+                requestAnimationFrame(() => { el.focus(); el.setSelectionRange(newPos, newPos); });
+                return;
+              }
+              // Non-list line: insert 2 spaces
+              const insert = '  ';
+              const newValue = value.slice(0, ss) + insert + value.slice(ss);
+              onChange({ target: { value: newValue } });
+              requestAnimationFrame(() => { el.focus(); el.setSelectionRange(ss + 2, ss + 2); });
+              return;
             }
             if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
               e.preventDefault();
