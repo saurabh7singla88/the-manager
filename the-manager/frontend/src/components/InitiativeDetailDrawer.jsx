@@ -2171,6 +2171,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               p: 1.25, borderRadius: 2, border: '1px solid #e2e8f0',
                               cursor: 'pointer',
                               '&:hover': { borderColor: '#c7d2fe', bgcolor: '#fafbff' },
+                              '&:hover .note-delete-btn': { opacity: 1 },
                               transition: 'all 0.13s',
                             }}
                           >
@@ -2180,9 +2181,27 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                             <Box flex={1} minWidth={0}>
                               <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.3}>
                                 <Typography variant="caption" fontWeight={700} color="text.primary">{c.user?.name}</Typography>
-                                <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, ml: 1 }}>
-                                  {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
-                                </Typography>
+                                <Box display="flex" alignItems="center" gap={0.25}>
+                                  {c.user?.id === user?.id && (
+                                    <Tooltip title="Delete note">
+                                      <IconButton
+                                        className="note-delete-btn"
+                                        size="small"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          if (!window.confirm('Delete this note? This cannot be undone.')) return;
+                                          await handleDeleteComment(c.id);
+                                        }}
+                                        sx={{ opacity: 0, transition: 'opacity 0.15s', p: 0.25, color: '#94a3b8', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' } }}
+                                      >
+                                        <Delete sx={{ fontSize: 13 }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                  )}
+                                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, ml: 0.5 }}>
+                                    {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
+                                  </Typography>
+                                </Box>
                               </Box>
                               <Typography variant="caption" color="text.secondary"
                                 sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
@@ -2344,9 +2363,17 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                     {meetingNotes.map(note => (
                       <Box
                         key={note.id}
+                        onClick={() => {
+                          setEditNote(note);
+                          setEditNoteSubject(note.subject || '');
+                          setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
+                          setEditNoteBody(note.body || '');
+                          setEditNoteError(null);
+                        }}
                         sx={{
                           border: '1px solid #e2e8f0', borderRadius: 2, px: 2, py: 1.5,
-                          '&:hover': { bgcolor: '#f8fafc', borderColor: '#c7d2fe' },
+                          cursor: 'pointer',
+                          '&:hover': { bgcolor: '#f8f7ff', borderColor: '#c7d2fe' },
                           transition: 'all 0.15s',
                         }}
                       >
@@ -2358,7 +2385,8 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                                 size="small"
                                 sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
                                 disabled={summarizingNoteId === note.id}
-                                onClick={async () => {
+                                onClick={async (e) => {
+                                  e.stopPropagation();
                                   setSummarizingNoteId(note.id);
                                   setMeetingSummaryError(null);
                                   try {
@@ -2385,7 +2413,7 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               <IconButton
                                 size="small"
                                 sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
-                                onClick={() => setViewNote(note)}
+                                onClick={(e) => { e.stopPropagation(); setViewNote(note); }}
                               >
                                 <Visibility sx={{ fontSize: 14 }} />
                               </IconButton>
@@ -2394,7 +2422,8 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                               <IconButton
                                 size="small"
                                 sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setEditNote(note);
                                   setEditNoteSubject(note.subject || '');
                                   setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
@@ -2405,18 +2434,20 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
                                 <Edit sx={{ fontSize: 14 }} />
                               </IconButton>
                             </Tooltip>
-                            <Tooltip title="Remove from this initiative">
+                            <Tooltip title="Delete note permanently">
                               <IconButton
                                 size="small"
-                                sx={{ color: '#94a3b8', '&:hover': { color: '#dc2626' }, p: 0.25 }}
-                                onClick={async () => {
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' }, p: 0.25 }}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!window.confirm(`Delete "${note.subject}"? This cannot be undone.`)) return;
                                   try {
-                                    await api.patch(`/meeting-notes/${note.id}`, { initiativeId: null });
+                                    await api.delete(`/meeting-notes/${note.id}`);
                                     setMeetingNotes(prev => prev.filter(n => n.id !== note.id));
                                   } catch (e) { console.error(e); }
                                 }}
                               >
-                                <LinkOff sx={{ fontSize: 14 }} />
+                                <Delete sx={{ fontSize: 14 }} />
                               </IconButton>
                             </Tooltip>
                           </Box>
@@ -2550,20 +2581,29 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
         <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
           onClick={() => setViewComment(null)}>Close</Button>
         {viewComment?.user?.id === user?.id && (
-          <Button size="small" variant="contained"
-            sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
-            onClick={() => {
-              setEditingCommentId(viewComment.id);
-              setEditingCommentText(viewComment.content);
-              setViewComment(null);
-              setTab(2);
-            }}>Edit</Button>
+          <>
+            <Button size="small" variant="outlined" color="error"
+              sx={{ borderRadius: 2, textTransform: 'none', ml: 'auto' }}
+              onClick={async () => {
+                if (!window.confirm('Delete this note? This cannot be undone.')) return;
+                await handleDeleteComment(viewComment.id);
+                setViewComment(null);
+              }}>Delete</Button>
+            <Button size="small" variant="contained"
+              sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+              onClick={() => {
+                setEditingCommentId(viewComment.id);
+                setEditingCommentText(viewComment.content);
+                setViewComment(null);
+                setTab(2);
+              }}>Edit</Button>
+          </>
         )}
       </DialogActions>
     </Dialog>
 
     {/* Edit Meeting Note */}
-    <Dialog open={!!editNote} onClose={() => setEditNote(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+    <Dialog open={!!editNote} onClose={() => setEditNote(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
       <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Edit Meeting Note</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
         {editNoteError && (
@@ -2594,8 +2634,8 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pa
             size="small"
             fullWidth
             multiline
-            minRows={5}
-            maxRows={14}
+            minRows={14}
+            maxRows={28}
             value={editNoteBody}
             onChange={e => setEditNoteBody(e.target.value)}
             onSubmit={handleSaveEditNote}
