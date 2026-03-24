@@ -1,5 +1,15 @@
+import { appendFileSync } from 'fs';
+
+function writeServerLog(msg) {
+  if (process.env.SERVER_LOG_PATH) {
+    try { appendFileSync(process.env.SERVER_LOG_PATH, msg + '\n'); } catch (_) {}
+  }
+}
+
 export const errorHandler = (err, req, res, next) => {
+  const errMsg = `[${new Date().toISOString()}] ${req.method} ${req.path} — ${err?.stack || String(err)}`;
   console.error('Error:', err);
+  writeServerLog(errMsg);
 
   // Prisma errors
   if (err.code === 'P2002') {

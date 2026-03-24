@@ -31,6 +31,7 @@ process.env.DATABASE_URL   = `file:${path.join(userDataPath, 'app.db')}`;
 process.env.PORT            = '47421';
 process.env.NODE_ENV        = isDev ? 'development' : 'production';
 process.env.ALLOWED_ORIGINS = isDev ? 'http://localhost:5173' : 'file://';
+process.env.SERVER_LOG_PATH = path.join(userDataPath, 'server.log');
 
 // JWT_SECRET: generate a stable per-device secret persisted in userData
 // In a real release you would derive this from a secure keychain entry.
