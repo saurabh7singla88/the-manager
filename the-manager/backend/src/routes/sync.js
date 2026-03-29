@@ -94,6 +94,7 @@ async function tursoExec(statements, { databaseUrl, authToken } = {}) {
  */
 function encodeTursoArg(v) {
   if (v === null || v === undefined) return { type: 'null' };
+  if (v instanceof Date) return { type: 'text', value: v.toISOString() };
   if (typeof v === 'number' || typeof v === 'bigint') {
     return Number.isInteger(Number(v))
       ? { type: 'integer', value: String(v) }
@@ -101,6 +102,34 @@ function encodeTursoArg(v) {
   }
   if (typeof v === 'boolean') return { type: 'integer', value: v ? '1' : '0' };
   return { type: 'text', value: String(v) };
+}
+
+/**
+ * Read all CREATE TABLE statements from local SQLite and replay them in Turso
+ * using IF NOT EXISTS so it's idempotent (safe to call every push).
+ */
+async function ensureSchemaInTurso() {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT name, sql FROM sqlite_master
+     WHERE type = 'table'
+       AND name NOT LIKE 'sqlite_%'
+       AND name NOT LIKE '_prisma_%'
+       AND sql IS NOT NULL
+     ORDER BY rowid`
+  );
+
+  if (!rows.length) return;
+
+  const stmts = rows.map(r => ({
+    // Convert "CREATE TABLE" → "CREATE TABLE IF NOT EXISTS"
+    sql: r.sql.replace(/^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i, 'CREATE TABLE IF NOT EXISTS '),
+  }));
+
+  // Batch to stay under HTTP limits
+  const BATCH = 50;
+  for (let i = 0; i < stmts.length; i += BATCH) {
+    await tursoExec(stmts.slice(i, i + BATCH));
+  }
 }
 
 /**
@@ -182,32 +211,70 @@ async function restoreToLocal(data) {
 }
 
 /**
- * Write a data dump into Turso via batched HTTP pipeline requests.
+ * Write a data dump into Turso atomically.
+ *
+ * All DELETE + INSERT statements are sent in a single HTTP pipeline call
+ * wrapped in BEGIN / COMMIT.  If anything fails the error is thrown before
+ * COMMIT is sent, Turso receives the 'close' sentinel and auto-rolls back,
+ * so Turso is never left in a partially-written state.
  */
 async function restoreToTurso(data) {
-  const stmts = [
-    { sql: 'PRAGMA foreign_keys = OFF' },
-    ...TABLE_DELETE_ORDER.map(t => ({ sql: `DELETE FROM "${t}"` })),
-  ];
+  const insertStmts = [];
 
   for (const table of TABLE_INSERT_ORDER) {
-    for (const row of (data[table] ?? [])) {
+    let rows = data[table] ?? [];
+    if (!rows.length) continue;
+
+    // Topological sort so parents are inserted before children
+    if (rows[0] && 'parentId' in rows[0]) rows = topoSort(rows);
+
+    for (const row of rows) {
       const cols = Object.keys(row);
       if (!cols.length) continue;
-      stmts.push({
+      insertStmts.push({
         sql:  `INSERT OR REPLACE INTO "${table}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
         args: cols.map(c => row[c] ?? null),
       });
     }
   }
 
-  stmts.push({ sql: 'PRAGMA foreign_keys = ON' });
+  // Find which tables actually exist in Turso (may differ from local schema
+  // e.g. google_tokens only exists if Gmail was ever connected).
+  const existsResult = await tursoExec([{
+    sql: `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+  }]);
+  const tursoTables = new Set(
+    (existsResult[0]?.rows ?? []).map(r => (typeof r[0] === 'object' ? r[0].value : r[0]))
+  );
 
-  // Batch to avoid hitting HTTP request size limits
-  const BATCH = 200;
-  for (let i = 0; i < stmts.length; i += BATCH) {
-    await tursoExec(stmts.slice(i, i + BATCH));
+  // Single HTTP call — BEGIN + deletes (only existing tables) + inserts + COMMIT.
+  // On any error tursoExec throws before COMMIT is reached; Turso auto-rolls back.
+  await tursoExec([
+    { sql: 'BEGIN' },
+    ...TABLE_DELETE_ORDER.filter(t => tursoTables.has(t)).map(t => ({ sql: `DELETE FROM "${t}"` })),
+    ...insertStmts,
+    { sql: 'COMMIT' },
+  ]);
+}
+
+/**
+ * Topological sort for self-referential rows (parentId → id).
+ * Rows with no parent (or whose parent isn't in the set) come first.
+ */
+function topoSort(rows) {
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const visited = new Set();
+  const result = [];
+
+  function visit(row) {
+    if (visited.has(row.id)) return;
+    visited.add(row.id);
+    if (row.parentId && byId.has(row.parentId)) visit(byId.get(row.parentId));
+    result.push(row);
   }
+
+  for (const row of rows) visit(row);
+  return result;
 }
 
 // ── In-memory state ───────────────────────────────────────────────────────────
@@ -232,6 +299,7 @@ router.post('/push', async (_req, res) => {
     return res.status(400).json({ error: 'Turso is not configured. Add credentials in Setup → Sync.' });
 
   try {
+    await ensureSchemaInTurso();   // create tables in Turso if this is the first push
     const data = await dumpFromLocal();
     await restoreToTurso(data);
     lastPushAt  = new Date().toISOString();

@@ -51,11 +51,13 @@ export default function Layout() {
       const r = await api.post('/sync/push');
       setSyncStatus(s => ({ ...s, lastPushAt: r.data.pushedAt }));
       setPushResult('ok');
-    } catch {
-      setPushResult('error');
+    } catch (e) {
+      const msg = e?.response?.data?.error || e?.message || 'Push failed';
+      console.error('[sync/push]', msg);
+      setPushResult({ type: 'error', msg });
     } finally {
       setPushing(false);
-      setTimeout(() => setPushResult(null), 4000);
+      setTimeout(() => setPushResult(null), 8000);
     }
   }, [pushing, pulling]);
 
@@ -68,11 +70,13 @@ export default function Layout() {
       setPullResult('ok');
       // Reload page so all in-memory Redux state refreshes from new DB data
       setTimeout(() => window.location.reload(), 800);
-    } catch {
-      setPullResult('error');
+    } catch (e) {
+      const msg = e?.response?.data?.error || e?.message || 'Pull failed';
+      console.error('[sync/pull]', msg);
+      setPullResult({ type: 'error', msg });
     } finally {
       setPulling(false);
-      setTimeout(() => setPullResult(null), 4000);
+      setTimeout(() => setPullResult(null), 8000);
     }
   }, [pushing, pulling]);
 
@@ -183,8 +187,12 @@ export default function Layout() {
       {/* Sync buttons — only shown when Turso is configured */}
       {syncStatus?.configured && (() => {
         const busy = pushing || pulling;
+        const isErr = (r) => r && typeof r === 'object' && r.type === 'error';
         const SyncBtn = ({ label, shortLabel, icon, loading, result, onClick, tooltipLabel }) => (
-          <Tooltip title={collapsed ? tooltipLabel : ''} placement="right" arrow>
+          <Tooltip
+            title={collapsed ? (isErr(result) ? `${shortLabel} failed: ${result.msg}` : tooltipLabel) : (isErr(result) ? result.msg : '')}
+            placement="right" arrow
+          >
             <Box
               onClick={busy ? undefined : onClick}
               sx={{
@@ -194,12 +202,12 @@ export default function Layout() {
                 cursor: busy ? 'default' : 'pointer',
                 opacity: busy && !loading ? 0.45 : 1,
                 bgcolor:
-                  result === 'ok'    ? 'rgba(34,197,94,0.15)'
-                  : result === 'error' ? 'rgba(239,68,68,0.15)'
+                  result === 'ok'  ? 'rgba(34,197,94,0.15)'
+                  : isErr(result)  ? 'rgba(239,68,68,0.15)'
                   : 'rgba(255,255,255,0.05)',
                 '&:hover': !busy ? {
                   bgcolor: result === 'ok' ? 'rgba(34,197,94,0.22)'
-                    : result === 'error'   ? 'rgba(239,68,68,0.22)'
+                    : isErr(result)        ? 'rgba(239,68,68,0.22)'
                     : 'rgba(255,255,255,0.10)',
                 } : {},
                 transition: 'background 0.2s',
@@ -209,15 +217,15 @@ export default function Layout() {
                 <CircularProgress size={15} sx={{ color: '#a5b4fc', flexShrink: 0 }} />
               ) : result === 'ok' ? (
                 <CheckCircle sx={{ fontSize: 15, color: '#4ade80', flexShrink: 0 }} />
-              ) : result === 'error' ? (
+              ) : isErr(result) ? (
                 <CloudOff sx={{ fontSize: 15, color: '#f87171', flexShrink: 0 }} />
               ) : icon}
               {!collapsed && (
                 <Typography variant="caption" sx={{
-                  color: result === 'ok' ? '#4ade80' : result === 'error' ? '#f87171' : SIDEBAR_TEXT,
+                  color: result === 'ok' ? '#4ade80' : isErr(result) ? '#f87171' : SIDEBAR_TEXT,
                   fontSize: '0.72rem', whiteSpace: 'nowrap',
                 }}>
-                  {loading ? `${label}ing…` : result === 'ok' ? `${shortLabel} ✓` : result === 'error' ? `${shortLabel} failed` : label}
+                  {loading ? `${label}ing…` : result === 'ok' ? `${shortLabel} ✓` : isErr(result) ? `${shortLabel} failed` : label}
                 </Typography>
               )}
             </Box>
