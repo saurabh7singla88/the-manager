@@ -14,10 +14,17 @@
  */
 
 import express from 'express';
-import { writeFileSync, existsSync, unlinkSync } from 'fs';
+import { writeFileSync, existsSync, unlinkSync, copyFileSync } from 'fs';
 import path from 'path';
 import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+
+// ── DB path helper ────────────────────────────────────────────────────────────
+function getLocalDbPath() {
+  const raw = process.env.DATABASE_URL || '';
+  // Strip file: prefix and normalise
+  return raw.replace(/^file:/, '');
+}
 
 const router = express.Router();
 router.use(authenticate);
@@ -134,29 +141,35 @@ async function ensureSchemaInTurso() {
 
 /**
  * Dump all tables from Turso into { tableName: rows[] }.
+ * Only silently skips "no such table" — all other errors are thrown.
  */
 async function dumpFromTurso() {
   const data = {};
   for (const table of TABLE_INSERT_ORDER) {
     try {
-      const stmts  = [{ sql: `SELECT * FROM "${table}"` }];
-      const results = await tursoExec(stmts);
+      const results = await tursoExec([{ sql: `SELECT * FROM "${table}"` }]);
       const result  = results[0];
       const cols    = result?.cols?.map(c => c.name) ?? [];
       const rows    = result?.rows ?? [];
       data[table] = rows.map(row =>
         Object.fromEntries(cols.map((col, i) => {
           const cell = row[i];
-          // Turso returns typed values: { type, value } or null
-          const val = cell == null ? null
-            : typeof cell === 'object' && 'value' in cell
-              ? (cell.type === 'null' ? null : cell.type === 'integer' ? Number(cell.value) : cell.value)
-              : cell;
-          return [col, val];
+          // Turso typed values: {type:"text"|"integer"|"float"|"blob"|"null", value?:...}
+          if (cell == null || cell?.type === 'null') return [col, null];
+          if (typeof cell !== 'object') return [col, cell]; // plain value (older API)
+          if (cell.type === 'integer') return [col, Number(cell.value)];
+          if (cell.type === 'float')   return [col, parseFloat(cell.value)];
+          return [col, cell.value ?? null]; // text, blob
         }))
       );
-    } catch {
-      data[table] = [];
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      // Silently skip tables that don't exist in Turso yet
+      if (msg.includes('no such table') || msg.includes('does not exist')) {
+        data[table] = [];
+      } else {
+        throw new Error(`Failed to dump table "${table}" from Turso: ${msg}`);
+      }
     }
   }
   return data;
@@ -185,29 +198,71 @@ async function dumpFromLocal() {
 }
 
 /**
- * Write a data dump into local DB via Prisma transaction.
+ * Write a data dump into local DB.
+ * Creates an auto-backup first and restores it automatically on any failure.
+ * Only operates on tables that actually exist locally.
  */
 async function restoreToLocal(data) {
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
-    for (const table of TABLE_DELETE_ORDER) {
-      await tx.$executeRawUnsafe(`DELETE FROM "${table}"`);
-    }
-    for (const table of TABLE_INSERT_ORDER) {
-      for (const row of (data[table] ?? [])) {
-        const cols = Object.keys(row);
-        if (!cols.length) continue;
-        const quoted       = cols.map(c => `"${c}"`).join(', ');
-        const placeholders = cols.map((_, i) => `?${i + 1}`).join(', ');
-        const vals         = cols.map(c => row[c] ?? null);
-        await tx.$executeRawUnsafe(
-          `INSERT OR REPLACE INTO "${table}" (${quoted}) VALUES (${placeholders})`,
-          ...vals
-        );
+  // ── 1. Auto-backup before touching anything ───────────────────────────────
+  const dbPath = getLocalDbPath();
+  let backupPath = null;
+  if (dbPath && existsSync(dbPath)) {
+    backupPath = `${dbPath}.pre-pull-${Date.now()}`;
+    copyFileSync(dbPath, backupPath);
+  }
+
+  // ── 2. Discover which tables exist locally ────────────────────────────────
+  const existingRows = await prisma.$queryRawUnsafe(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_prisma_%'`
+  );
+  const existingTables = new Set(existingRows.map(r => r.name));
+
+  // ── 3. Wipe + restore inside a transaction ────────────────────────────────
+  // PRAGMA foreign_keys must be set OUTSIDE a transaction in SQLite.
+  // We also set it again at the start of the transaction as a belt-and-suspenders
+  // measure in case Prisma uses a different connection for the transaction.
+  try {
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
+
+      for (const table of TABLE_DELETE_ORDER) {
+        if (!existingTables.has(table)) continue;
+        await tx.$executeRawUnsafe(`DELETE FROM "${table}"`);
       }
+
+      for (const table of TABLE_INSERT_ORDER) {
+        if (!existingTables.has(table)) continue;
+        let rows = data[table] ?? [];
+        if (rows.length && rows[0] && 'parentId' in rows[0]) rows = topoSort(rows);
+        for (const row of rows) {
+          const cols = Object.keys(row);
+          if (!cols.length) continue;
+          await tx.$executeRawUnsafe(
+            `INSERT OR REPLACE INTO "${table}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${cols.map((_, i) => `?${i + 1}`).join(', ')})`,
+            ...cols.map(c => row[c] ?? null)
+          );
+        }
+      }
+    }, { timeout: 60_000 });
+
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON');
+
+    // Success — delete the auto-backup
+    if (backupPath && existsSync(backupPath)) unlinkSync(backupPath);
+
+  } catch (err) {
+    // Restore from auto-backup so data is never permanently lost
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON').catch(() => {});
+    if (backupPath && existsSync(backupPath) && dbPath) {
+      try {
+        copyFileSync(backupPath, dbPath);
+        unlinkSync(backupPath);
+      } catch { /* ignore secondary errors */ }
     }
-    await tx.$executeRawUnsafe('PRAGMA foreign_keys = ON');
-  }, { timeout: 60_000 });
+    throw err;
+  }
 }
 
 /**
@@ -319,6 +374,18 @@ router.post('/pull', async (_req, res) => {
 
   try {
     const data = await dumpFromTurso();
+
+    // Safety check: refuse to overwrite local data if Turso is empty or has no users.
+    // This prevents data loss if pull is triggered before a push has ever been done.
+    const remoteUserCount = data['users']?.length ?? 0;
+    const remoteTotalRows = TABLE_INSERT_ORDER.reduce((n, t) => n + (data[t]?.length ?? 0), 0);
+    if (remoteUserCount === 0 || remoteTotalRows === 0) {
+      return res.status(400).json({
+        error: `Remote database appears to be empty (${remoteTotalRows} total rows, ${remoteUserCount} users). ` +
+               `Push your data first from the source machine before pulling here.`,
+      });
+    }
+
     await restoreToLocal(data);
     lastPullAt  = new Date().toISOString();
     lastPullErr = null;
