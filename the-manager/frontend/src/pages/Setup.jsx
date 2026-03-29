@@ -7,6 +7,7 @@ import {
 import {
   SmartToy, Visibility, VisibilityOff, CheckCircle, Save,
   Email, CheckCircleOutline, ErrorOutline, Launch, BugReport,
+  SyncAlt, CloudOff,
 } from '@mui/icons-material';
 import api from '../api/axios';
 
@@ -640,6 +641,148 @@ function JiraSection() {
   );
 }
 
+// ─── Turso Sync Section ───────────────────────────────────────────────────────
+function TursoSection() {
+  const [status, setStatus]         = useState(null);  // { configured, databaseUrl, lastSyncAt }
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState(false);
+  const [removing, setRemoving]     = useState(false);
+  const [saved, setSaved]           = useState(false);
+  const [error, setError]           = useState('');
+  const [showToken, setShowToken]   = useState(false);
+  const [form, setForm] = useState({ databaseUrl: '', authToken: '' });
+
+  const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  useEffect(() => {
+    api.get('/sync/status')
+      .then(r => { setStatus(r.data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setError(''); setSaving(true); setSaved(false);
+    try {
+      await api.post('/sync/config', form);
+      setSaved(true);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to save credentials.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    setError(''); setRemoving(true);
+    try {
+      await api.delete('/sync/config');
+      setStatus(s => ({ ...s, configured: false, databaseUrl: null }));
+      setSaved(false);
+      setForm({ databaseUrl: '', authToken: '' });
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to remove credentials.');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  if (loading) return <CircularProgress size={24} />;
+
+  return (
+    <Box display="flex" flexDirection="column" gap={2.5}>
+      {/* Status chip */}
+      {status?.configured ? (
+        <Alert
+          severity="success"
+          icon={<CheckCircleOutline />}
+          sx={{ borderRadius: 2 }}
+          action={
+            <Button color="error" size="small" onClick={remove} disabled={removing}
+              sx={{ textTransform: 'none', fontWeight: 600 }}
+            >
+              {removing ? 'Removing…' : 'Disconnect'}
+            </Button>
+          }
+        >
+          Connected to Turso: <strong>{status.databaseUrl}</strong>
+          {(status.lastPushAt || status.lastPullAt) && (
+            <><br />
+              {status.lastPushAt && <small>Last push: {new Date(status.lastPushAt).toLocaleString()}</small>}
+              {status.lastPushAt && status.lastPullAt && <span> · </span>}
+              {status.lastPullAt && <small>Last pull: {new Date(status.lastPullAt).toLocaleString()}</small>}
+            </>
+          )}
+        </Alert>
+      ) : (
+        <Alert severity="info" icon={<CloudOff />} sx={{ borderRadius: 2 }}>
+          Not connected. Enter your Turso database URL and auth token below to enable cross-device sync.
+        </Alert>
+      )}
+
+      {/* How to get credentials */}
+      <Alert severity="info" icon={false} sx={{ borderRadius: 2, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
+        <Typography variant="caption" color="text.secondary">
+          Create a free database at{' '}
+          <Link href="https://turso.tech" target="_blank" rel="noreferrer">turso.tech</Link>, then run:
+          {' '}<code>turso db create the-manager</code>{' '}and{' '}
+          <code>turso db tokens create the-manager</code>
+          <br />The database URL looks like: <code>libsql://the-manager-yourname.turso.io</code>
+        </Typography>
+      </Alert>
+
+      <TextField
+        label="Turso Database URL"
+        size="small"
+        fullWidth
+        value={form.databaseUrl}
+        onChange={set('databaseUrl')}
+        placeholder="libsql://your-db-name.turso.io"
+        helperText={status?.configured ? '✓ Credentials are currently active (restart required to change)' : ''}
+        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+      />
+
+      <TextField
+        label="Auth Token"
+        type={showToken ? 'text' : 'password'}
+        size="small"
+        fullWidth
+        value={form.authToken}
+        onChange={set('authToken')}
+        placeholder={status?.configured ? 'Paste new token to replace…' : 'Your Turso auth token'}
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end">
+              <IconButton size="small" onClick={() => setShowToken(v => !v)}>
+                {showToken ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+              </IconButton>
+            </InputAdornment>
+          ),
+        }}
+        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+      />
+
+      {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
+      {saved && (
+        <Alert severity="success" icon={<CheckCircle />} sx={{ borderRadius: 2 }}>
+          Credentials saved! <strong>Restart the app</strong> to activate Turso sync.
+        </Alert>
+      )}
+
+      <Box display="flex" justifyContent="flex-end">
+        <Button
+          variant="contained"
+          onClick={save}
+          disabled={saving || !form.databaseUrl || !form.authToken}
+          startIcon={saving ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <Save fontSize="small" />}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, px: 3 }}
+        >
+          {saving ? 'Saving…' : 'Save Sync Settings'}
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
 // ─── Main Setup page ──────────────────────────────────────────────────────────
 export default function Setup() {
   return (
@@ -679,6 +822,15 @@ export default function Setup() {
         subtitle="Link JIRA tickets and Confluence pages to initiatives"
       >
         <JiraSection />
+      </Section>
+
+      {/* Turso Sync */}
+      <Section
+        icon={<SyncAlt sx={{ color: '#0ea5e9', fontSize: 22 }} />}
+        title="Cross-Device Sync (Turso)"
+        subtitle="Sync your data between Windows and Mac using a Turso embedded replica"
+      >
+        <TursoSection />
       </Section>
     </Box>
   );

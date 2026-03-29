@@ -12,6 +12,7 @@ import gmailRoutes from './routes/gmail.js';
 import meetingNotesRoutes from './routes/meeting-notes.js';
 import jiraRoutes from './routes/jira.js';
 import integrationsRoutes from './routes/integrations.js';
+import syncRoutes from './routes/sync.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { prisma } from './lib/prisma.js';
 
@@ -48,6 +49,7 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/meeting-notes', meetingNotesRoutes);
 app.use('/api/jira', jiraRoutes);
 app.use('/api/integrations', integrationsRoutes);
+app.use('/api/sync', syncRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
