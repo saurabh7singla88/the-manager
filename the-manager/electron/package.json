@@ -1,0 +1,112 @@
+{
+  "name": "the-manager-desktop",
+  "version": "1.0.0",
+  "description": "The Manager — desktop wrapper",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron .",
+    "postinstall": "prisma generate --schema=../backend/prisma/schema.prisma && node -e \"const {cpSync}=require('fs');cpSync('../backend/node_modules/@prisma/client','./node_modules/@prisma/client',{recursive:true,force:true});cpSync('../backend/node_modules/.prisma','./node_modules/.prisma',{recursive:true,force:true});console.log('Prisma client synced to electron/node_modules')\"",
+    "sync:prisma": "node -e \"const {cpSync}=require('fs');cpSync('../backend/node_modules/@prisma/client','./node_modules/@prisma/client',{recursive:true,force:true});cpSync('../backend/node_modules/.prisma','./node_modules/.prisma',{recursive:true,force:true});console.log('Prisma client synced')\"",
+    "build:frontend": "cd ../frontend && npm run build",
+    "sign:mac": "codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac-arm64/The Manager.app' && codesign --deep --force --sign - --entitlements entitlements.plist 'dist/mac/The Manager.app' 2>/dev/null || true",
+    "dmg:mac": "hdiutil create -volname 'The Manager' -srcfolder 'dist/mac-arm64/The Manager.app' -ov -format UDZO 'dist/The Manager-arm64-signed.dmg' && echo 'DMG rebuilt with signed app'",
+    "build:mac": "cd ../backend && npx prisma generate && cd ../electron && npm run sync:prisma && npm run build:frontend && node -e \"require('esbuild').buildSync({entryPoints:['../backend/src/server.js'],bundle:true,platform:'node',target:'node20',format:'cjs',outfile:'./backend-bundle/server.bundle.cjs',external:['@prisma/client','.prisma/client','bcrypt'],minify:false})\" && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac && npm run sign:mac && npm run dmg:mac",
+    "build:win": "cd ../backend && npx prisma generate && cd ../electron && npm run sync:prisma && npm run build:frontend && node -e \"require('esbuild').buildSync({entryPoints:['../backend/src/server.js'],bundle:true,platform:'node',target:'node20',format:'cjs',outfile:'./backend-bundle/server.bundle.cjs',external:['@prisma/client','.prisma/client','bcrypt'],minify:false})\" && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "build:win:installer": "npm run sync:prisma && npm run build:frontend && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=nsis"
+  },
+  "build": {
+    "appId": "com.themanager.app",
+    "productName": "The Manager",
+    "copyright": "Copyright © 2026",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "main.js",
+          "preload.cjs"
+        ]
+      },
+      {
+        "from": "./backend-bundle",
+        "to": "backend-bundle"
+      },
+      {
+        "from": "../backend/prisma",
+        "to": "backend/prisma",
+        "filter": [
+          "migrations/**",
+          "schema.prisma",
+          "!dev.db"
+        ]
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "node_modules/.prisma",
+        "to": "resources/app/node_modules/.prisma"
+      },
+      {
+        "from": "node_modules/prisma",
+        "to": "resources/prisma-cli"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "sign": null,
+      "signingHashAlgorithms": null
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0",
+    "esbuild": "^0.27.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "imapflow": "^1.2.12",
+    "jsonwebtoken": "^9.0.2",
+    "mailparser": "^3.9.3",
+    "prisma": "^5.8.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.8.0",
+    "bcrypt": "^5.1.1"
+  }
+}

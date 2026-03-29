@@ -781,10 +781,74 @@ npm install react-router-dom @reduxjs/toolkit react-redux @mui/material @emotion
 - **User guide:** Feature documentation
 - **Architecture diagram:** System overview
 
+## 13. Data Synchronization (Desktop App)
+
+Because the desktop app stores data in a local SQLite file, syncing between two machines (e.g. work laptop + home laptop) requires an explicit strategy. Options are listed from simplest to most capable:
+
 ---
 
-**Version:** 1.4  
-**Last Updated:** March 5, 2026  
+### Option A — Manual Export / Import (MVP, recommended first)
+
+Add **Export** and **Import** buttons to the Setup page.
+
+- **Export:** Calls a new `GET /api/export` endpoint that reads every table and returns a single JSON document (`{ users, initiatives, canvases, notes, links, ... }`). The Electron main process triggers a Save dialog and writes the file.
+- **Import:** User selects a previously exported `.json` file. A new `POST /api/import` endpoint receives it and upserts all records (using Prisma `upsert` on `id`). Conflicts are resolved by `updatedAt` — newer record wins.
+
+**Pros:** No infrastructure, works fully offline, one-time effort.  
+**Cons:** Manual step; data created on both machines between exports will conflict.
+
+---
+
+### Option B — Shared File via Cloud Storage (zero-code, with caveats)
+
+Move the database file to a synced folder (OneDrive, Dropbox, iCloud) by configuring `DATABASE_URL` in the app settings to point to a file inside the sync folder.
+
+**Pros:** Zero development effort; free with existing subscriptions.  
+**Cons:** SQLite is not safe for concurrent writes. This only works reliably if the app is **never open on both machines at the same time**. Cloud clients sometimes hold file locks that corrupt SQLite. Not recommended for production use — only suitable for a single user who is disciplined about opening the app on one machine at a time.
+
+---
+
+### Option C — Turso / LibSQL Embedded Replicas (recommended medium-term)
+
+[Turso](https://turso.tech) offers a hosted SQLite-compatible database with **embedded replica** support. The local replica is a real SQLite file (Prisma/libsql driver reads it directly), and changes sync to the cloud automatically.
+
+**What changes:**
+- Replace `@prisma/client` with `@prisma/adapter-libsql` + `@libsql/client`
+- Swap the Prisma datasource driver to `libsql`
+- Store `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in app settings (entered by user on first run)
+- Each device has its own local replica; Turso syncs them in the background
+
+**Pros:** True bidirectional sync; works offline; SQLite-compatible (no schema changes); generous free tier.  
+**Cons:** Requires a Turso account; extra setup for end users; sync conflicts resolved by Turso's last-write-wins per-row strategy.
+
+---
+
+### Option D — Self-Hosted Shared Server (teams / multi-user)
+
+Skip Electron and run the app as a **web server** on a shared machine (NAS, VPS, home server). Every device accesses it via browser at e.g. `http://192.168.1.x:3001`. No desktop packaging needed.
+
+**What changes:**
+- Nothing in the backend; switch back to PostgreSQL for robustness
+- Users access via browser; no Electron install required
+- Optional: package as a Docker image for easy self-hosting
+
+**Pros:** True multi-user; real-time access from any device including phone; no sync problem at all.  
+**Cons:** Requires a always-on server; not offline-capable.
+
+---
+
+### Recommended Roadmap
+
+| Stage | Approach |
+|---|---|
+| MVP desktop | Option A — Export/Import JSON |
+| Single user, two machines | Option C — Turso embedded replica |
+| Small team | Option D — Self-hosted server + PostgreSQL |
+
+---
+
+**Version:** 1.6  
+**Last Updated:** March 8, 2026  
 **Status:** Draft
 
 ### Phase 11: SQLite Migration ✅ Implemented
@@ -803,3 +867,183 @@ Replaced PostgreSQL with a local SQLite file — no database server required.
 
 **Setup (after this change)**  
 No database server needed. Run `npx prisma migrate dev` once after cloning — it creates `prisma/dev.db` automatically. Delete `dev.db` to fully reset all data.
+
+---
+
+### Phase 12: Desktop App (Electron) — Planned
+**Duration:** 2–3 weeks  
+**Target platforms:** Windows 10/11 (`.exe` NSIS installer), macOS 12+ (`.dmg`)
+
+#### Architecture overview
+
+Add an `electron/` package alongside `backend/` and `frontend/`. The Electron **main process**:
+
+1. Resolves the user-data directory (`%APPDATA%\TheManager` on Windows, `~/Library/Application Support/TheManager` on Mac) and sets all required env vars in-process before anything else (`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `ALLOWED_ORIGINS`).
+2. Runs `prisma migrate deploy` via `child_process.spawnSync` against the packaged Prisma CLI to apply any pending migrations on first launch or after an update.
+3. Dynamically imports the Express server (`await import('../backend/src/server.js')`) so the backend runs **in-process** — no child process, no IPC overhead.
+4. Once the server emits ready, opens a `BrowserWindow` that loads `frontend/dist/index.html` using a `file://` URL.
+
+#### File / folder structure
+
+```
+the-manager/
+  electron/
+    package.json          ← electron, electron-builder deps + build config
+    main.js               ← Electron main process entry point
+    preload.js            ← optional preload for contextBridge
+  backend/               ← unchanged Express + Prisma (ESM)
+  frontend/              ← unchanged React + Vite
+    dist/                ← built output (generated, gitignored)
+```
+
+#### Changes required to existing code
+
+| File | Change | Why |
+|---|---|---|
+| `frontend/vite.config.js` | Add `base: './'` | Asset URLs must be relative for `file://` loading |
+| `frontend/.env.production` | `VITE_API_URL=http://localhost:3001/api` | Vite proxy only runs in dev; production build must hit the backend directly |
+| `backend/src/server.js` | Export a `startServer()` promise that resolves when `app.listen` is ready | Allows `main.js` to `await` the server before opening the window |
+| `.gitignore` | Add `electron/dist/`, `frontend/dist/` | Build artifacts should not be committed |
+
+#### `electron/main.js` — responsibilities
+
+```javascript
+import { app, BrowserWindow } from 'electron';
+import path from 'path';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const userDataPath = app.getPath('userData');
+
+// 1. Set env vars before importing anything that reads them
+process.env.DATABASE_URL   = `file:${path.join(userDataPath, 'app.db')}`;
+process.env.JWT_SECRET     = 'desktop-local-secret-change-me';
+process.env.PORT           = '3001';
+process.env.NODE_ENV       = 'production';
+process.env.ALLOWED_ORIGINS = 'file://';
+
+// 2. Run migrations
+spawnSync('npx', ['prisma', 'migrate', 'deploy'], {
+  cwd: path.join(__dirname, '../backend'),
+  env: process.env,
+  stdio: 'inherit'
+});
+
+// 3. Start Express in-process
+const { startServer } = await import('../backend/src/server.js');
+await startServer();
+
+// 4. Open window
+app.whenReady().then(() => {
+  const win = new BrowserWindow({
+    width: 1400, height: 900,
+    webPreferences: { contextIsolation: true }
+  });
+  win.loadFile(path.join(__dirname, '../frontend/dist/index.html'));
+});
+```
+
+#### `electron/package.json` — electron-builder config
+
+```json
+{
+  "name": "the-manager",
+  "version": "1.0.0",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron .",
+    "build:frontend": "cd ../frontend && npm run build",
+    "build": "npm run build:frontend && electron-builder --win --mac"
+  },
+  "build": {
+    "appId": "com.themanager.app",
+    "productName": "The Manager",
+    "files": [
+      "main.js",
+      "preload.js",
+      "../backend/**/*",
+      "../frontend/dist/**/*",
+      "!../backend/node_modules/.cache"
+    ],
+    "asarUnpack": [
+      "**/node_modules/.prisma/**",
+      "**/node_modules/@prisma/client/**"
+    ],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg", "category": "public.app-category.productivity" }
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}
+```
+
+> **Why `asarUnpack` for Prisma?**  
+> Prisma's query engine is a native `.node` / `.dll.node` / `.dylib.node` binary. Electron's `asar` archive cannot execute native binaries — they must be unpacked to the filesystem alongside the asar file.
+
+#### Build commands
+
+```powershell
+# One-time: install Electron deps
+cd electron && npm install
+
+# Development (opens Electron with live backend, loads built frontend)
+cd electron && npx electron .
+
+# Production build (outputs installers to electron/dist/)
+cd electron && npm run build
+```
+
+#### Implementation checklist
+
+- [ ] Create `electron/` folder with `package.json`, `main.js`, `preload.js`
+- [ ] Add `base: './'` to `frontend/vite.config.js`
+- [ ] Create `frontend/.env.production` with `VITE_API_URL`
+- [ ] Export `startServer()` from `backend/src/server.js`
+- [ ] Configure `asarUnpack` for Prisma native binaries
+- [ ] Test on Windows: `npm run build -- --win`
+- [ ] Test on macOS: `npm run build -- --mac`
+- [ ] Verify SQLite db created correctly in OS userData path
+- [ ] Verify AI (Ollama) and Gmail integrations still work
+- [ ] Set up auto-update via `electron-updater` (optional, post-MVP)
+
+---
+
+### First-Time User Steps (after installing the desktop app)
+
+These steps apply to a user who has downloaded and installed the `.exe` (Windows) or `.dmg` (Mac) for the first time.
+
+**Step 1 — Install the app**
+- Windows: Run the `TheManager-Setup-x.x.x.exe` installer. It installs to `%LOCALAPPDATA%\Programs\TheManager` by default.
+- Mac: Open the `.dmg`, drag *The Manager* to your Applications folder.
+
+**Step 2 — Launch the app**
+- Double-click the app icon.
+- On first launch, the app automatically creates the local SQLite database at:
+  - Windows: `%APPDATA%\TheManager\app.db`
+  - Mac: `~/Library/Application Support/TheManager/app.db`
+- No internet connection is required for this step.
+
+**Step 3 — Register your account**
+- The app opens to the login screen.
+- Click **"Register here"** and create your account (name, email, password).
+- This account is stored locally — it is not sent to any server.
+
+**Step 4 — (Optional) Configure AI features**
+- Navigate to **Setup** in the sidebar.
+- To use local AI (recommended): install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.1`), and set the Ollama URL to `http://localhost:11434`.
+- To use OpenAI or Gemini: enter your API key in the Setup page.
+- If you skip this, AI suggestions are disabled but all other features work.
+
+**Step 5 — (Optional) Configure Gmail integration**
+- Navigate to **Setup** and enter your Gmail address and an [App Password](https://support.google.com/accounts/answer/185833).
+- Required only for the Meeting Notes / Gmail import feature.
+- All other features (initiatives, tasks, notes, mind map) work without this.
+
+**Step 6 — Start using the app**
+- Create your first Canvas (optional grouping) from the top pill bar.
+- Add initiatives from the **Dashboard** or **Initiatives** page.
+- Use **Tasks** for standalone action items, **Notes** for freeform writing.

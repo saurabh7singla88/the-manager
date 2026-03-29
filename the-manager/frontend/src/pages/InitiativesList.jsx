@@ -10,16 +10,24 @@ import {
   Grid, CircularProgress, Divider, Tooltip, InputAdornment,
   Autocomplete
 } from '@mui/material';
-import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare } from '@mui/icons-material';
+import { Add, Edit, Delete, ExpandMore, ExpandLess, AccountTree, AddCircleOutline, Search, Visibility, Clear, Label, PersonAdd, IosShare, Assessment, DragIndicator } from '@mui/icons-material';
+import StatusReportDialog from '../components/StatusReportDialog';
 import { AISuggestionsButton } from '../components/AISuggestionsPanel';
 import { Avatar, AvatarGroup } from '@mui/material';
 import {
-  fetchInitiatives, createInitiative, updateInitiative,
+  fetchInitiatives, fetchAllInitiatives, createInitiative, updateInitiative,
   deleteInitiative, updateStatus, updatePriority
 } from '../features/initiatives/initiativesSlice';
 import { format } from 'date-fns';
 import InitiativeDetailDrawer from '../components/InitiativeDetailDrawer';
 import InitiativeSummaryDialog from '../components/InitiativeSummaryDialog';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#64748b', bg: '#f1f5f9' },
@@ -72,11 +80,40 @@ function getTimelineDate(key) {
   return d.toISOString().slice(0, 10);
 }
 
+// Sortable wrapper for root-level initiative rows (drag-and-drop)
+function SortableInitiativeItem({ id, children }) {
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id });
+  return (
+    <Box
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      sx={{ opacity: isDragging ? 0.5 : 1, display: 'flex', alignItems: 'flex-start', gap: 0.5 }}
+    >
+      <Tooltip title="Drag to reorder" placement="left">
+        <Box
+          {...attributes}
+          {...listeners}
+          sx={{
+            mt: 1.75, color: 'text.disabled', cursor: 'grab', flexShrink: 0, lineHeight: 0,
+            '&:active': { cursor: 'grabbing' },
+            '&:hover': { color: 'text.secondary' },
+          }}
+        >
+          <DragIndicator sx={{ fontSize: 18 }} />
+        </Box>
+      </Tooltip>
+      <Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+    </Box>
+  );
+}
+
 export default function InitiativesList() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { items, loading } = useSelector((state) => state.initiatives);
+  const { items, loading, allItems } = useSelector((state) => state.initiatives);
   const { activeCanvasId, canvases } = useSelector((state) => ({
     activeCanvasId: state.canvas.activeCanvasId.initiatives,
     canvases: state.canvas.canvases,
@@ -105,12 +142,38 @@ export default function InitiativesList() {
   );
   const [loadingChildren, setLoadingChildren] = useState({});
 
+  // Status Report dialog
+  const [reportOpen, setReportOpen] = useState(false);
+
   // Detail drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerInitiativeId, setDrawerInitiativeId] = useState(null);
 
   // Summary dialog
   const [summaryId, setSummaryId] = useState(null);
+
+  // Drag-and-drop ordering (root-level only)
+  const [orderedItems, setOrderedItems] = useState([]);
+  const reorderTimerRef = useRef(null);
+  useEffect(() => { setOrderedItems(items); }, [items]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+  const handleDragEnd = useCallback(({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    setOrderedItems(prev => {
+      const oldIdx = prev.findIndex(i => i.id === active.id);
+      const newIdx = prev.findIndex(i => i.id === over.id);
+      const reordered = arrayMove(prev, oldIdx, newIdx);
+      clearTimeout(reorderTimerRef.current);
+      reorderTimerRef.current = setTimeout(() => {
+        api.patch('/initiatives/reorder', {
+          items: reordered.map((item, idx) => ({ id: item.id, sortOrder: idx })),
+        }).catch(() => {});
+      }, 400);
+      return reordered;
+    });
+  }, []);
 
   // Auto-open drawer and expand ancestor chain when ?open=<id> is in the URL
   useEffect(() => {
@@ -203,6 +266,10 @@ export default function InitiativesList() {
       ...(canvasId !== undefined && canvasId !== null ? { canvasId } : {}),
     }));
   }, [dispatch]);
+
+  useEffect(() => {
+    dispatch(fetchAllInitiatives());
+  }, [dispatch]); // eslint-disable-line
 
   useEffect(() => {
     doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
@@ -313,6 +380,14 @@ export default function InitiativesList() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this initiative and all its children?')) {
       await dispatch(deleteInitiative(id));
+      // Remove the deleted item (and any of its children) from the local childrenMap
+      setChildrenMap(prev => {
+        const next = {};
+        for (const [parentId, children] of Object.entries(prev)) {
+          next[parentId] = children.filter(c => c.id !== id);
+        }
+        return next;
+      });
       doFetch(searchText, filterStatus, filterPriority, activeCanvasId);
     }
   };
@@ -510,7 +585,24 @@ export default function InitiativesList() {
 
   return (
     <Box>
-      <CanvasSelector screen="initiatives" />
+      <CanvasSelector
+        screen="initiatives"
+        countsByCanvas={allItems.length > 0
+          ? Object.fromEntries(
+              canvases.map(c => [
+                c.id,
+                allItems.filter(i =>
+                  !i.parentId &&
+                  !i.isStandaloneTask &&
+                  i.canvasId === c.id &&
+                  i.status !== 'COMPLETED' &&
+                  i.status !== 'CANCELLED'
+                ).length,
+              ])
+            )
+          : undefined
+        }
+      />
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
         <Box>
           <Typography variant="h4" fontWeight={700}>Initiatives</Typography>
@@ -527,6 +619,15 @@ export default function InitiativesList() {
             Mind Map
           </Button>
           <AISuggestionsButton canvasId={activeCanvasId} />
+          <Tooltip title="Generate Status Report">
+            <Button
+              variant="outlined"
+              startIcon={<Assessment />}
+              onClick={() => setReportOpen(true)}
+            >
+              Status Report
+            </Button>
+          </Tooltip>
           <Button
             variant="contained"
             startIcon={<Add />}
@@ -612,7 +713,23 @@ export default function InitiativesList() {
           <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>Create Initiative</Button>
         </Box>
       ) : (
-        <Box>{items.map(initiative => renderInitiative(initiative))}</Box>
+        (() => {
+          const isDragEnabled = !searchText && !filterStatus && !filterPriority;
+          const listContent = isDragEnabled ? (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={orderedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
+                {orderedItems.map(initiative => (
+                  <SortableInitiativeItem key={initiative.id} id={initiative.id}>
+                    {renderInitiative(initiative)}
+                  </SortableInitiativeItem>
+                ))}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            orderedItems.map(initiative => renderInitiative(initiative))
+          );
+          return <Box>{listContent}</Box>;
+        })()
       )}
 
       {/* Create/Edit Dialog */}
@@ -877,6 +994,14 @@ export default function InitiativesList() {
         open={!!summaryId}
         initiativeId={summaryId}
         onClose={() => setSummaryId(null)}
+      />
+
+      {/* Status Report Dialog */}
+      <StatusReportDialog
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        activeCanvasId={activeCanvasId}
+        canvases={canvases}
       />
 
       {/* Quick create user dialog */}

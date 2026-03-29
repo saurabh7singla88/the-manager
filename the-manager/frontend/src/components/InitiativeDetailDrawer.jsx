@@ -1,23 +1,28 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import {
   Drawer, Box, Typography, IconButton, Tabs, Tab, Chip, Divider,
   TextField, Button, LinearProgress, Select, MenuItem, FormControl,
   Avatar, Tooltip, CircularProgress, InputAdornment, Slider,
   List, ListItem, ListItemAvatar, ListItemText,
   Dialog, DialogTitle, DialogContent, DialogActions, InputLabel,
-  Autocomplete
+  Autocomplete, Menu, Checkbox
 } from '@mui/material';
 import {
   Close, Add, Delete, Edit, Link as LinkIcon, Comment,
   History, Info, OpenInNew, Send, CheckCircle, Label,
   CalendarToday, Person, TrendingUp, PersonAdd,
-  IosShare
+  IosShare, EventNote, ArrowBack, AutoFixHigh, ContentCopy, Done,
+  BugReport, Refresh, LinkOff, AccountTree, ExpandMore, ExpandLess, Chat, DeleteSweep, Visibility,
 } from '@mui/icons-material';
 import api from '../api/axios';
-import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives, fetchInitiatives } from '../features/initiatives/initiativesSlice';
+import { updateInitiative, updateStatus, updatePriority, fetchAllInitiatives } from '../features/initiatives/initiativesSlice';
 import { format, formatDistanceToNow } from 'date-fns';
 import InitiativeSummaryDialog from './InitiativeSummaryDialog';
+import RephraseTool from './RephraseTool';
+import RichEditor from './RichEditor';
+import RichText, { stripMarkdown } from './RichText';
 
 const STATUS_CONFIG = {
   OPEN:        { label: 'Open',        color: '#475569', bg: '#f1f5f9' },
@@ -32,7 +37,7 @@ const PRIORITY_CONFIG = {
   CRITICAL: { color: '#dc2626', bg: '#fef2f2' },
   HIGH:     { color: '#d97706', bg: '#fffbeb' },
   MEDIUM:   { color: '#6366f1', bg: '#eff6ff' },
-  LOW:      { color: '#64748b', bg: '#f1f5f9' },
+  LOW:      { color: '#64748b', bg: '#f1f2f9' },
 };
 
 const ACTION_LABELS = {
@@ -44,12 +49,21 @@ const ACTION_LABELS = {
   comment_added:    'Left a comment',
 };
 
+const AI_ACTIONS = [
+  { value: 'summarize',           label: 'Summarize',                    emoji: '\u2728' },
+  { value: 'implementation_plan', label: 'Create Implementation Plan',   emoji: '\uD83D\uDCCB' },
+  { value: 'risk_assessment',     label: 'Risk Assessment',              emoji: '\u26A0\uFE0F' },
+  { value: 'acceptance_criteria', label: 'Generate Acceptance Criteria', emoji: '\u2705' },
+  { value: 'status_report',       label: 'Draft Status Report',          emoji: '\uD83D\uDCCA' },
+];
+
 function TabPanel({ value, idx, children }) {
   return value === idx ? <Box sx={{ flex: 1, overflowY: 'auto' }}>{children}</Box> : null;
 }
 
-export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) {
+export default function InitiativeDetailDrawer({ initiativeId, open, onClose, pageMode = false }) {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { allItems, items } = useSelector(s => s.initiatives);
   const { user } = useSelector(s => s.auth);
   const { canvases } = useSelector(s => s.canvas);
@@ -73,9 +87,35 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const [sendingComment, setSendingComment] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState(null);
   const [editingCommentText, setEditingCommentText] = useState('');
+  const [viewComment, setViewComment] = useState(null);
 
   // Activity state
   const [activity, setActivity] = useState([]);
+
+  // Meeting notes state
+  const [meetingNotes, setMeetingNotes] = useState([]);
+  const [meetingSummaryOpen, setMeetingSummaryOpen] = useState(false);
+  const [meetingSummaryText, setMeetingSummaryText] = useState('');
+  const [meetingSummaryTitle, setMeetingSummaryTitle] = useState('');
+  const [meetingSummaryLoading, setMeetingSummaryLoading] = useState(false);
+  const [meetingSummaryError, setMeetingSummaryError] = useState(null);
+  const [meetingSummaryCopied, setMeetingSummaryCopied] = useState(false);
+  const [summarizingNoteId, setSummarizingNoteId] = useState(null);
+  // manual add meeting note
+  const [addNoteOpen, setAddNoteOpen] = useState(false);
+  const [addNoteSubject, setAddNoteSubject] = useState('');
+  const [addNoteDate, setAddNoteDate] = useState('');
+  const [addNoteBody, setAddNoteBody] = useState('');
+  const [addNoteSaving, setAddNoteSaving] = useState(false);
+  const [addNoteError, setAddNoteError] = useState(null);
+  // edit meeting note
+  const [editNote, setEditNote] = useState(null); // the note being edited
+  const [editNoteSubject, setEditNoteSubject] = useState('');
+  const [editNoteDate, setEditNoteDate] = useState('');
+  const [editNoteBody, setEditNoteBody] = useState('');
+  const [editNoteSaving, setEditNoteSaving] = useState(false);
+  const [editNoteError, setEditNoteError] = useState(null);
+  const [viewNote, setViewNote] = useState(null);
 
   // Inline edit state
   const [editingTitle, setEditingTitle] = useState(false);
@@ -90,8 +130,35 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
     [allItems, items]
   );
 
+  // Integration items (JIRA tickets + Confluence pages)
+  const [integrationItems, setIntegrationItems] = useState([]);
+  const [intAddType, setIntAddType]     = useState('JIRA'); // 'JIRA' | 'CONFLUENCE'
+  const [intInput, setIntInput]         = useState('');
+  const [intAdding, setIntAdding]       = useState(false);
+  const [intError, setIntError]         = useState('');
+  const [showIntForm, setShowIntForm]   = useState(false);
+  const [refreshingId, setRefreshingId] = useState(null);
+  const [childrenMap, setChildrenMap]     = useState({});   // itemId → child-ticket array
+  const [fetchingChildrenId, setFetchingChildrenId] = useState(null);
+  const [expandedChildren, setExpandedChildren]     = useState({});  // itemId → bool
+  const [itemAiMap, setItemAiMap]               = useState({});  // itemId → {open,action,actionLabel,text,loading,error}
+  const [selectedItemIds, setSelectedItemIds]   = useState(new Set());
+  const [consolidatedAi, setConsolidatedAi]     = useState({ open: false, action: 'summarize', text: '', loading: false, error: '' });
+  const [aiMenuAnchor, setAiMenuAnchor]         = useState(null); // { el, itemId } | null
+  const [chatOpen, setChatOpen]                 = useState(false);
+  const [chatMessages, setChatMessages]         = useState([]); // [{role:'user'|'assistant', content, ts}]
+  const [chatInput, setChatInput]               = useState('');
+  const [chatSending, setChatSending]           = useState(false);
+  const [chatError, setChatError]               = useState('');
+  const chatBottomRef                           = useRef(null);
+
   // Summary
   const [summaryOpen, setSummaryOpen] = useState(false);
+
+  // Scroll chat to bottom when messages update
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, chatSending]);
 
   // Quick user create
   const [quickUserOpen, setQuickUserOpen] = useState(false);
@@ -102,16 +169,20 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const fetchAll = useCallback(async (id) => {
     setLoading(true);
     try {
-      const [fullRes, linksRes, commentsRes, activityRes] = await Promise.all([
+      const [fullRes, linksRes, commentsRes, activityRes, meetingNotesRes, intRes] = await Promise.all([
         api.get(`/initiatives/${id}`),
         api.get(`/initiatives/${id}/links`),
         api.get(`/initiatives/${id}/comments`),
         api.get(`/initiatives/${id}/activity`),
+        api.get('/meeting-notes', { params: { initiativeId: id } }),
+        api.get(`/integrations/initiatives/${id}`),
       ]);
       setFullData(fullRes.data);
       setLinks(linksRes.data);
       setComments(commentsRes.data);
       setActivity(activityRes.data);
+      setMeetingNotes(meetingNotesRes.data);
+      setIntegrationItems(intRes.data);
     } catch (e) {
       console.error('Failed to load initiative details', e);
     } finally {
@@ -150,19 +221,16 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
   const saveField = async (field, value) => {
     await dispatch(updateInitiative({ id: initiativeId, data: { [field]: value } }));
     dispatch(fetchAllInitiatives());
-    dispatch(fetchInitiatives({ parentId: 'null' }));
     setFullData(prev => prev ? { ...prev, [field]: value } : prev);
   };
 
   const handleStatusChange = async (status) => {
     await dispatch(updateStatus({ id: initiativeId, status }));
-    dispatch(fetchAllInitiatives());
     setFullData(prev => prev ? { ...prev, status } : prev);
   };
 
   const handlePriorityChange = async (priority) => {
     await dispatch(updatePriority({ id: initiativeId, priority }));
-    dispatch(fetchAllInitiatives());
     setFullData(prev => prev ? { ...prev, priority } : prev);
   };
 
@@ -226,23 +294,472 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
     setComments(prev => prev.filter(c => c.id !== commentId));
   };
 
-  return (
-    <>
-    <Drawer
-      anchor="right"
-      open={open}
-      onClose={onClose}
-      PaperProps={{
-        sx: {
-          width: { xs: '100vw', sm: 480 },
-          display: 'flex',
-          flexDirection: 'column',
-          borderLeft: '1px solid #e2e8f0',
-          boxShadow: '-4px 0 32px rgba(0,0,0,0.1)',
+  // ── Meeting note save handlers ─────────────────────────────────────────────
+  const handleSaveEditNote = async () => {
+    if (!editNoteSubject.trim() || editNoteSaving || !editNote) return;
+    setEditNoteSaving(true);
+    setEditNoteError(null);
+    try {
+      const res = await api.patch(`/meeting-notes/${editNote.id}`, {
+        subject: editNoteSubject.trim(),
+        date:    editNoteDate || null,
+        body:    editNoteBody.trim(),
+      });
+      setMeetingNotes(prev => prev.map(n => n.id === editNote.id ? res.data : n));
+      setEditNote(null);
+    } catch (e) {
+      setEditNoteError(e.response?.data?.error || 'Failed to save');
+    } finally {
+      setEditNoteSaving(false);
+    }
+  };
+
+  const handleSaveAddNote = async () => {
+    if (!addNoteSubject.trim() || addNoteSaving) return;
+    setAddNoteSaving(true);
+    setAddNoteError(null);
+    try {
+      const res = await api.post('/meeting-notes', {
+        subject:      addNoteSubject.trim(),
+        date:         addNoteDate || null,
+        body:         addNoteBody.trim(),
+        initiativeId: initiativeId,
+      });
+      setMeetingNotes(prev => [res.data, ...prev]);
+      setAddNoteOpen(false);
+    } catch (e) {
+      setAddNoteError(e.response?.data?.error || 'Failed to save note');
+    } finally {
+      setAddNoteSaving(false);
+    }
+  };
+
+  // ── Integrations (JIRA + Confluence) ──────────────────────────────────────────────
+  const handleAddIntegration = async () => {
+    if (!intInput.trim()) return;
+    setIntAdding(true);
+    setIntError('');
+    try {
+      const res = await api.post(`/integrations/initiatives/${initiativeId}`, {
+        type: intAddType,
+        input: intInput.trim(),
+      });
+      setIntegrationItems(prev => [...prev, res.data]);
+      setIntInput('');
+      setShowIntForm(false);
+    } catch (e) {
+      setIntError(e.response?.data?.error || 'Failed to add.');
+    } finally {
+      setIntAdding(false);
+    }
+  };
+
+  const handleRefreshIntegration = async (itemId) => {
+    setRefreshingId(itemId);
+    try {
+      const res = await api.post(`/integrations/${itemId}/refresh`);
+      setIntegrationItems(prev => prev.map(i => i.id === itemId ? res.data : i));
+    } catch (e) {
+      console.error('Failed to refresh', e);
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
+  const handleRemoveIntegration = async (itemId) => {
+    await api.delete(`/integrations/${itemId}`);
+    setIntegrationItems(prev => prev.filter(i => i.id !== itemId));
+    setChildrenMap(prev => { const n = {...prev}; delete n[itemId]; return n; });
+    setItemAiMap(prev => { const n = {...prev}; delete n[itemId]; return n; });
+    setSelectedItemIds(prev => { const n = new Set(prev); n.delete(itemId); return n; });
+  };
+
+  const handleFetchChildren = async (item) => {
+    setFetchingChildrenId(item.id);
+    try {
+      const endpoint = item.type === 'JIRA'
+        ? `/integrations/${item.id}/children`
+        : `/integrations/${item.id}/confluence-children`;
+      const res = await api.get(endpoint);
+      setChildrenMap(prev => ({ ...prev, [item.id]: res.data }));
+      setExpandedChildren(prev => ({ ...prev, [item.id]: true }));
+    } catch (e) {
+      console.error('Failed to fetch children', e);
+    } finally {
+      setFetchingChildrenId(null);
+    }
+  };
+
+  const toggleExpandChildren = (itemId) =>
+    setExpandedChildren(prev => ({ ...prev, [itemId]: !prev[itemId] }));
+
+  const handleRunAiAction = async (item, action) => {
+    const itemId = item.id;
+    const actionMeta = AI_ACTIONS.find(a => a.value === action) || AI_ACTIONS[0];
+    let data = {};
+    try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+    setItemAiMap(prev => ({ ...prev, [itemId]: { open: true, action, actionLabel: actionMeta.label, text: '', loading: true, error: '' } }));
+    try {
+      let children = childrenMap[itemId] || [];
+      if (children.length === 0) {
+        const endpoint = item.type === 'JIRA'
+          ? `/integrations/${itemId}/children`
+          : `/integrations/${itemId}/confluence-children`;
+        try {
+          const r = await api.get(endpoint);
+          children = r.data;
+          if (children.length > 0) {
+            setChildrenMap(prev => ({ ...prev, [itemId]: children }));
+            setExpandedChildren(prev => ({ ...prev, [itemId]: true }));
+          }
+        } catch { /* proceed without children */ }
+      }
+      const res = await api.post('/ai/summarize-item', {
+        initiativeTitle: detail?.title || '',
+        action,
+        item: {
+          type:        item.type,
+          key:         item.key,
+          title:       item.type === 'JIRA' ? (data.summary || item.title || '') : (data.title || item.title || ''),
+          description: item.type === 'JIRA' ? (data.description || '') : (data.excerpt || ''),
+          status:      data.status || '',
+          priority:    data.priority || '',
+          assignee:    data.assignee || null,
+          space:       data.space || '',
+          url:         item.url,
+        },
+        children,
+      });
+      if (res.data?.summary) {
+        setItemAiMap(prev => ({ ...prev, [itemId]: { open: true, action, actionLabel: actionMeta.label, text: res.data.summary, loading: false, error: '' } }));
+      } else {
+        setItemAiMap(prev => ({ ...prev, [itemId]: { open: true, action, actionLabel: actionMeta.label, text: '', loading: false, error: 'AI did not return a result.' } }));
+      }
+    } catch (e) {
+      setItemAiMap(prev => ({ ...prev, [itemId]: { open: true, action, actionLabel: actionMeta.label, text: '', loading: false, error: e?.response?.data?.error || 'Failed to run AI action.' } }));
+    }
+  };
+
+  const handleConsolidatedAiAction = async () => {
+    const action = consolidatedAi.action;
+    const selectedItems = integrationItems.filter(i => selectedItemIds.has(i.id));
+    if (!selectedItems.length) return;
+    setConsolidatedAi(prev => ({ ...prev, open: true, text: '', loading: true, error: '' }));
+    try {
+      const itemsWithChildren = await Promise.all(selectedItems.map(async (item) => {
+        let data = {};
+        try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+        let children = childrenMap[item.id] || [];
+        if (children.length === 0) {
+          const endpoint = item.type === 'JIRA'
+            ? `/integrations/${item.id}/children`
+            : `/integrations/${item.id}/confluence-children`;
+          try {
+            const r = await api.get(endpoint);
+            children = r.data;
+            if (children.length > 0) setChildrenMap(prev => ({ ...prev, [item.id]: children }));
+          } catch { /* continue */ }
         }
-      }}
-    >
-      {loading || !detail ? (
+        return {
+          type:        item.type,
+          key:         item.key,
+          title:       item.type === 'JIRA' ? (data.summary || item.title || '') : (data.title || item.title || ''),
+          description: item.type === 'JIRA' ? (data.description || '') : (data.excerpt || ''),
+          status:      data.status || '',
+          priority:    data.priority || '',
+          assignee:    data.assignee || null,
+          space:       data.space || '',
+          url:         item.url,
+          children,
+        };
+      }));
+      const res = await api.post('/ai/action-on-items', {
+        initiativeTitle: detail?.title || '',
+        action,
+        items: itemsWithChildren,
+      });
+      if (res.data?.summary) {
+        setConsolidatedAi(prev => ({ ...prev, text: res.data.summary, loading: false, error: '' }));
+      } else {
+        setConsolidatedAi(prev => ({ ...prev, text: '', loading: false, error: 'AI did not return a result.' }));
+      }
+    } catch (e) {
+      setConsolidatedAi(prev => ({ ...prev, text: '', loading: false, error: e?.response?.data?.error || 'Failed to run AI action.' }));
+    }
+  };
+
+  const handleSendChatMessage = async () => {
+    const msg = chatInput.trim();
+    if (!msg || chatSending) return;
+    setChatInput('');
+    setChatError('');
+    setChatMessages(prev => [...prev, { role: 'user', content: msg, ts: Date.now() }]);
+    setChatSending(true);
+    try {
+      const targetItems = selectedItemIds.size > 0
+        ? integrationItems.filter(i => selectedItemIds.has(i.id))
+        : integrationItems;
+      const itemsPayload = targetItems.map(item => {
+        let data = {};
+        try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+        return {
+          type:        item.type,
+          key:         item.key,
+          title:       item.type === 'JIRA' ? (data.summary || item.title || '') : (data.title || item.title || ''),
+          description: item.type === 'JIRA' ? (data.description || '') : (data.excerpt || ''),
+          status:      data.status || '',
+          priority:    data.priority || '',
+          assignee:    data.assignee || null,
+          space:       data.space || '',
+          url:         item.url,
+          children:    childrenMap[item.id] || [],
+        };
+      });
+      // snapshot current history before this send (excludes the just-added user msg)
+      const historyForApi = chatMessages.map(m => ({ role: m.role, content: m.content }));
+      const res = await api.post('/ai/chat-with-items', {
+        initiativeTitle: detail?.title || '',
+        items: itemsPayload,
+        history: historyForApi,
+        userMessage: msg,
+      });
+      if (res.data?.response) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: res.data.response, ts: Date.now() }]);
+      } else {
+        setChatError('AI did not respond.');
+      }
+    } catch (e) {
+      setChatError(e?.response?.data?.error || 'Failed to send message.');
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const handleClose = () => { if (pageMode) navigate(-1); else if (onClose) onClose(); };
+
+  // ── Render a single JIRA/Confluence integration item card ─────────────────
+  const renderIntItem = (item) => {
+    let data = null;
+    try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+    const isJira = item.type === 'JIRA';
+    const statusColor = (() => {
+      const cat = (data?.statusCategory || '').toLowerCase();
+      if (cat === 'done') return { color: '#065f46', bg: '#d1fae5' };
+      if (cat === 'in progress') return { color: '#1d4ed8', bg: '#dbeafe' };
+      return { color: '#475569', bg: '#f1f5f9' };
+    })();
+    const isSelected = selectedItemIds.has(item.id);
+    return (
+      <Box key={item.id} sx={{
+        p: 1.5, borderRadius: 2,
+        border: `1.5px solid ${isSelected ? '#a78bfa' : isJira ? '#dbeafe' : '#e0f2fe'}`,
+        bgcolor: isSelected ? '#fdf4ff' : isJira ? '#fafbff' : '#f0f9ff',
+        '&:hover': { borderColor: isSelected ? '#8b5cf6' : '#0052cc55', boxShadow: '0 1px 6px rgba(0,82,204,0.07)' },
+        transition: 'all 0.15s',
+      }}>
+        {/* Header row */}
+        <Box display="flex" alignItems="center" gap={0.75} mb={0.4}>
+          <Checkbox
+            size="small"
+            checked={isSelected}
+            onChange={() => setSelectedItemIds(prev => {
+              const n = new Set(prev);
+              if (n.has(item.id)) n.delete(item.id); else n.add(item.id);
+              return n;
+            })}
+            sx={{ p: 0.25, mr: -0.5, color: '#c4b5fd', '&.Mui-checked': { color: '#7c3aed' } }}
+          />
+          <Chip
+            label={isJira ? 'JIRA' : 'Confluence'}
+            size="small"
+            sx={{ height: 16, fontSize: '0.58rem', fontWeight: 700, border: 0, bgcolor: isJira ? '#0052cc' : '#0077b6', color: '#fff' }}
+          />
+          <Typography
+            variant="caption" component="a" href={item.url} target="_blank" rel="noopener noreferrer" fontWeight={700}
+            sx={{ color: '#0052cc', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+          >
+            {isJira ? item.key : (data?.spaceKey ? `${data.spaceKey} › ${item.key}` : item.key)}
+          </Typography>
+          <OpenInNew sx={{ fontSize: 10, color: '#0052cc' }} />
+          {isJira && data?.issueType && (
+            <Chip label={data.issueType} size="small"
+              sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+          )}
+          {isJira && data?.status && (
+            <Chip label={data.status} size="small"
+              sx={{ height: 15, fontSize: '0.58rem', bgcolor: statusColor.bg, color: statusColor.color, border: 0, ml: 'auto' }} />
+          )}
+          {!isJira && data?.space && (
+            <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto', fontSize: '0.62rem' }}>{data.space}</Typography>
+          )}
+          <Box display="flex" gap={0.25} sx={{ ml: isJira && data?.status ? 0 : 'auto' }}>
+            <Tooltip title={isJira ? (childrenMap[item.id] ? 'Reload child tickets' : 'Fetch child tickets') : (childrenMap[item.id] ? 'Reload child pages' : 'Fetch child pages')}>
+              <IconButton size="small" sx={{ p: 0.25, color: fetchingChildrenId === item.id ? '#7c3aed' : 'text.secondary' }}
+                onClick={() => handleFetchChildren(item)} disabled={fetchingChildrenId === item.id}>
+                {fetchingChildrenId === item.id ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} /> : <AccountTree sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="AI actions">
+              <IconButton size="small"
+                sx={{ p: 0.25, color: '#7c3aed', opacity: itemAiMap[item.id]?.loading ? 1 : 0.45, '&:hover': { opacity: 1 } }}
+                onClick={(e) => setAiMenuAnchor({ el: e.currentTarget, itemId: item.id })}
+                disabled={itemAiMap[item.id]?.loading}>
+                {itemAiMap[item.id]?.loading ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} /> : <AutoFixHigh sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Refresh">
+              <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary' }}
+                onClick={() => handleRefreshIntegration(item.id)} disabled={refreshingId === item.id}>
+                {refreshingId === item.id ? <CircularProgress size={11} /> : <Refresh sx={{ fontSize: 13 }} />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Remove">
+              <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                onClick={() => handleRemoveIntegration(item.id)}>
+                <LinkOff sx={{ fontSize: 13 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* Title */}
+        <Typography variant="body2" fontWeight={600} mb={0.4} sx={{ color: '#1e293b', lineHeight: 1.3 }}>
+          {isJira ? data?.summary : data?.title}
+        </Typography>
+
+        {/* Description / Excerpt */}
+        {(isJira ? data?.description : data?.excerpt) && (
+          <Typography variant="caption" color="text.secondary"
+            sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
+            {isJira ? data.description : data.excerpt}
+          </Typography>
+        )}
+
+        {/* Meta row */}
+        <Box display="flex" flexWrap="wrap" gap={1} mt={0.5}>
+          {isJira && data?.priority && <Typography variant="caption" color="text.disabled">Priority: <b>{data.priority}</b></Typography>}
+          {isJira && data?.assignee && <Typography variant="caption" color="text.disabled">Assignee: <b>{data.assignee}</b></Typography>}
+          {!isJira && data?.version && <Typography variant="caption" color="text.disabled">v{data.version}</Typography>}
+          {(isJira ? data?.updated : data?.lastUpdated) && (
+            <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+              Updated {format(new Date(isJira ? data.updated : data.lastUpdated), 'MMM d, yyyy')}
+            </Typography>
+          )}
+        </Box>
+
+        {/* JIRA Labels */}
+        {isJira && data?.labels?.length > 0 && (
+          <Box display="flex" flexWrap="wrap" gap={0.5} mt={0.5}>
+            {data.labels.map(lbl => (
+              <Chip key={lbl} label={lbl} size="small"
+                sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#f1f5f9', color: 'text.secondary', border: 0 }} />
+            ))}
+          </Box>
+        )}
+
+        {/* Confluence breadcrumb */}
+        {!isJira && data?.ancestors?.length > 0 && (
+          <Typography variant="caption" color="text.disabled" display="block" mt={0.4} sx={{ fontSize: '0.62rem' }}>
+            {data.ancestors.join(' › ')}
+          </Typography>
+        )}
+
+        {/* Children */}
+        {childrenMap[item.id] !== undefined && (
+          <Box mt={0.75}>
+            <Box display="flex" alignItems="center" gap={0.5} sx={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => toggleExpandChildren(item.id)}>
+              {expandedChildren[item.id] ? <ExpandLess sx={{ fontSize: 13, color: 'text.secondary' }} /> : <ExpandMore sx={{ fontSize: 13, color: 'text.secondary' }} />}
+              <Typography variant="caption" fontWeight={600} color="text.secondary" sx={{ fontSize: '0.68rem' }}>
+                {childrenMap[item.id].length === 0
+                  ? (isJira ? 'No child tickets' : 'No child pages')
+                  : `${childrenMap[item.id].length} child ${isJira ? `ticket${childrenMap[item.id].length > 1 ? 's' : ''}` : `page${childrenMap[item.id].length > 1 ? 's' : ''}`}`}
+              </Typography>
+            </Box>
+            {expandedChildren[item.id] && childrenMap[item.id].length > 0 && (
+              <Box mt={0.5} pl={0.5} sx={{ borderLeft: `2px solid ${isJira ? '#dbeafe' : '#bae6fd'}` }}
+                display="flex" flexDirection="column" gap={0.5}>
+                {isJira ? childrenMap[item.id].map(child => {
+                  const childCat = (child.statusCategory || '').toLowerCase();
+                  const childStatusColor = childCat === 'done' ? { color: '#065f46', bg: '#d1fae5' }
+                    : childCat === 'in progress' ? { color: '#1d4ed8', bg: '#dbeafe' } : { color: '#475569', bg: '#f1f5f9' };
+                  return (
+                    <Box key={child.key} sx={{ pl: 1 }}>
+                      <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                        <Typography variant="caption" component="a" href={child.url}
+                          target="_blank" rel="noopener noreferrer" fontWeight={700}
+                          sx={{ color: '#0052cc', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                          {child.key}
+                        </Typography>
+                        {child.issueType && <Chip label={child.issueType} size="small" sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />}
+                        <Chip label={child.status || '?'} size="small"
+                          sx={{ height: 13, fontSize: '0.56rem', bgcolor: childStatusColor.bg, color: childStatusColor.color, border: 0 }} />
+                        {child.assignee && <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.62rem' }}>{child.assignee}</Typography>}
+                      </Box>
+                      {child.summary && (
+                        <Typography variant="caption" color="text.primary"
+                          sx={{ fontSize: '0.7rem', display: 'block', lineHeight: 1.35, mt: 0.1 }}>
+                          {child.summary}
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                }) : childrenMap[item.id].map(page => (
+                  <Box key={page.id} sx={{ pl: 1 }}>
+                    <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                      <Typography variant="caption" component="a" href={page.url}
+                        target="_blank" rel="noopener noreferrer" fontWeight={700}
+                        sx={{ color: '#0077b6', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                        {page.title}
+                      </Typography>
+                      {page.spaceKey && <Chip label={page.spaceKey} size="small" sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#e0f2fe', color: '#0077b6', border: 0 }} />}
+                    </Box>
+                    {page.excerpt && (
+                      <Typography variant="caption" color="text.secondary"
+                        sx={{ fontSize: '0.68rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.35, mt: 0.1 }}>
+                        {page.excerpt}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {/* Per-item AI result */}
+        {itemAiMap[item.id]?.open && (
+          <Box mt={1} sx={{ p: 1.25, borderRadius: 1.5, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.5}>
+              <Typography variant="caption" fontWeight={700} color="#7c3aed" sx={{ fontSize: '0.7rem' }}>
+                {AI_ACTIONS.find(a => a.value === itemAiMap[item.id]?.action)?.emoji || '✨'}{' '}
+                {itemAiMap[item.id]?.actionLabel || 'AI Result'}
+              </Typography>
+              <IconButton size="small" sx={{ p: 0.2 }}
+                onClick={() => setItemAiMap(prev => ({ ...prev, [item.id]: { ...prev[item.id], open: false } }))}>
+                <Close sx={{ fontSize: 12 }} />
+              </IconButton>
+            </Box>
+            {itemAiMap[item.id]?.loading && (
+              <Box display="flex" alignItems="center" gap={0.75}>
+                <CircularProgress size={12} sx={{ color: '#7c3aed' }} />
+                <Typography variant="caption" color="text.secondary">Running…</Typography>
+              </Box>
+            )}
+            {itemAiMap[item.id]?.error && <Typography variant="caption" color="error.main">{itemAiMap[item.id].error}</Typography>}
+            {itemAiMap[item.id]?.text && (
+              <Typography variant="caption" color="text.primary"
+                sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.75rem' }}>
+                {itemAiMap[item.id].text}
+              </Typography>
+            )}
+          </Box>
+        )}
+      </Box>
+    );
+  };
+
+  const innerContent = loading || !detail ? (
         <Box display="flex" alignItems="center" justifyContent="center" flex={1}>
           <CircularProgress />
         </Box>
@@ -289,14 +806,23 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                 </Box>
               </Box>
               <Box display="flex" alignItems="center" gap={0.5}>
+                {!pageMode && (
+                  <Tooltip title="Open full page">
+                    <IconButton size="small" onClick={() => navigate(`/initiatives/${initiativeId}`)} sx={{ color: 'text.secondary' }}>
+                      <OpenInNew fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title="Share summary">
                   <IconButton size="small" onClick={() => setSummaryOpen(true)} sx={{ color: 'text.secondary' }}>
                     <IosShare fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <IconButton size="small" onClick={onClose} sx={{ mt: -0.25, mr: -0.5 }}>
-                  <Close fontSize="small" />
-                </IconButton>
+                <Tooltip title={pageMode ? 'Go back' : 'Close'}>
+                  <IconButton size="small" onClick={handleClose} sx={{ mt: -0.25, mr: -0.5 }}>
+                    {pageMode ? <ArrowBack fontSize="small" /> : <Close fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
               </Box>
             </Box>
 
@@ -340,11 +866,12 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
               </FormControl>
             </Box>
 
-            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 36, mb: -0.5 }}>
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ minHeight: 36, mb: -0.5 }}>
               <Tab icon={<Info sx={{ fontSize: 15 }} />} iconPosition="start" label="Overview" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
-              <Tab icon={<LinkIcon sx={{ fontSize: 15 }} />} iconPosition="start" label={`Links${links.length ? ` (${links.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
+              <Tab icon={<LinkIcon sx={{ fontSize: 15 }} />} iconPosition="start" label={`Links${(links.length + integrationItems.length) ? ` (${links.length + integrationItems.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<Comment sx={{ fontSize: 15 }} />} iconPosition="start" label={`Notes${comments.length ? ` (${comments.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
               <Tab icon={<History sx={{ fontSize: 15 }} />} iconPosition="start" label="Activity" sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
+              <Tab icon={<EventNote sx={{ fontSize: 15 }} />} iconPosition="start" label={`Meetings${meetingNotes.length ? ` (${meetingNotes.length})` : ''}`} sx={{ minHeight: 36, py: 0.5, fontSize: '0.78rem' }} />
             </Tabs>
           </Box>
 
@@ -360,18 +887,28 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                   DESCRIPTION
                 </Typography>
                 {editingDesc ? (
-                  <TextField
-                    autoFocus
-                    fullWidth
-                    multiline
-                    rows={4}
-                    size="small"
-                    value={descDraft}
-                    onChange={e => setDescDraft(e.target.value)}
-                    onBlur={() => { saveField('description', descDraft); setEditingDesc(false); }}
-                    onKeyDown={e => { if (e.key === 'Escape') setEditingDesc(false); }}
-                    sx={{ mb: 2 }}
-                  />
+                  <Box sx={{ position: 'relative', mb: 2 }}>
+                    <TextField
+                      autoFocus
+                      fullWidth
+                      multiline
+                      rows={4}
+                      size="small"
+                      value={descDraft}
+                      onChange={e => setDescDraft(e.target.value)}
+                      onBlur={() => { saveField('description', descDraft); setEditingDesc(false); }}
+                      onKeyDown={e => { if (e.key === 'Escape') setEditingDesc(false); }}
+                    />
+                    <Box
+                      sx={{ position: 'absolute', bottom: 4, right: 4 }}
+                      onMouseDown={e => e.preventDefault()}
+                    >
+                      <RephraseTool
+                        text={descDraft}
+                        onApply={(v) => { setDescDraft(v); saveField('description', v); setEditingDesc(false); }}
+                      />
+                    </Box>
+                  </Box>
                 ) : (
                   <Typography
                     variant="body2"
@@ -568,6 +1105,592 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
 
                 </>
 
+                {/* JIRA & Confluence moved to the Links tab */}
+                {null && <>
+                  <Divider sx={{ my: 2 }} />
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <BugReport sx={{ fontSize: 14, color: '#0052cc' }} />
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        JIRA &amp; CONFLUENCE
+                      </Typography>
+                      {integrationItems.length > 0 && (
+                        <Chip label={integrationItems.length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+                      )}
+                    </Box>
+                    <Box display="flex" alignItems="center" gap={0.5}>
+                      {integrationItems.length > 0 && (
+                        <Tooltip title={chatOpen ? 'Close chat' : 'Chat with linked documents'}>
+                          <Button
+                            size="small"
+                            startIcon={<Chat sx={{ fontSize: '13px !important' }} />}
+                            onClick={() => setChatOpen(v => !v)}
+                            sx={{
+                              fontSize: '0.72rem', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0,
+                              color: chatOpen ? '#fff' : '#6366f1',
+                              bgcolor: chatOpen ? '#6366f1' : 'transparent',
+                              '&:hover': { bgcolor: chatOpen ? '#4f46e5' : '#eff6ff' },
+                            }}
+                          >
+                            Chat
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Button
+                        size="small"
+                        startIcon={<Add sx={{ fontSize: '13px !important' }} />}
+                        onClick={() => { setShowIntForm(v => !v); setIntError(''); setIntInput(''); }}
+                        sx={{ fontSize: '0.72rem', textTransform: 'none', color: '#0052cc', py: 0.25, px: 0.75, minWidth: 0 }}
+                      >
+                        Link
+                      </Button>
+                    </Box>
+                  </Box>
+
+                  {/* Selection toolbar */}
+                  {selectedItemIds.size > 0 && (
+                    <Box display="flex" alignItems="center" gap={1} mb={1.25} px={1} py={0.75}
+                      sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, border: '1px solid #bae6fd', flexWrap: 'wrap' }}>
+                      <Typography variant="caption" fontWeight={700} color="#0369a1" sx={{ flexShrink: 0 }}>
+                        {selectedItemIds.size} selected
+                      </Typography>
+                      <Select
+                        size="small"
+                        value={consolidatedAi.action}
+                        onChange={e => setConsolidatedAi(prev => ({ ...prev, action: e.target.value }))}
+                        sx={{ fontSize: '0.72rem', flex: 1, minWidth: 150, '& .MuiSelect-select': { py: 0.4, px: 1 } }}
+                      >
+                        {AI_ACTIONS.map(a => (
+                          <MenuItem key={a.value} value={a.value} sx={{ fontSize: '0.8rem', gap: 1 }}>
+                            {a.emoji} {a.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <Button
+                        size="small" variant="contained"
+                        onClick={handleConsolidatedAiAction}
+                        disabled={consolidatedAi.loading}
+                        sx={{ fontSize: '0.72rem', textTransform: 'none', flexShrink: 0, bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, py: 0.4 }}
+                      >
+                        {consolidatedAi.loading
+                          ? <CircularProgress size={12} sx={{ color: '#fff' }} />
+                          : 'Run ✨'}
+                      </Button>
+                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setSelectedItemIds(new Set())}>
+                        <Close sx={{ fontSize: 13 }} />
+                      </IconButton>
+                    </Box>
+                  )}
+
+                  {/* Consolidated AI result panel */}
+                  {consolidatedAi.open && (
+                    <Box sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                        <Typography variant="caption" fontWeight={700} color="#7c3aed">
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.emoji || '✨'}{' '}
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.label || 'AI Result'}
+                          {selectedItemIds.size > 0 && ` — ${selectedItemIds.size} items`}
+                        </Typography>
+                        <IconButton size="small" sx={{ p: 0.25 }}
+                          onClick={() => setConsolidatedAi(prev => ({ ...prev, open: false }))}>
+                          <Close sx={{ fontSize: 13 }} />
+                        </IconButton>
+                      </Box>
+                      {consolidatedAi.loading && (
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <CircularProgress size={13} sx={{ color: '#7c3aed' }} />
+                          <Typography variant="caption" color="text.secondary">Running…</Typography>
+                        </Box>
+                      )}
+                      {consolidatedAi.error && (
+                        <Typography variant="caption" color="error.main">{consolidatedAi.error}</Typography>
+                      )}
+                      {consolidatedAi.text && (
+                        <Typography variant="caption" color="text.primary"
+                          sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.78rem' }}>
+                          {consolidatedAi.text}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* ── Chat panel ── */}
+                  {chatOpen && integrationItems.length > 0 && (
+                    <Box sx={{ mb: 1.5, borderRadius: 2, border: '1.5px solid #c7d2fe', bgcolor: '#fafbff', overflow: 'hidden' }}>
+                      {/* Chat header */}
+                      <Box display="flex" alignItems="center" justifyContent="space-between"
+                        sx={{ px: 1.5, py: 0.75, bgcolor: '#6366f1', borderBottom: '1px solid #c7d2fe' }}>
+                        <Box display="flex" alignItems="center" gap={0.75}>
+                          <Chat sx={{ fontSize: 13, color: '#fff' }} />
+                          <Typography variant="caption" fontWeight={700} color="#fff" sx={{ fontSize: '0.72rem' }}>
+                            Chat —{' '}
+                            {selectedItemIds.size > 0
+                              ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                              : `all ${integrationItems.length} item${integrationItems.length > 1 ? 's' : ''}`}
+                          </Typography>
+                        </Box>
+                        <Box display="flex" alignItems="center">
+                          {chatMessages.length > 0 && (
+                            <Tooltip title="Clear conversation">
+                              <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                                onClick={() => { setChatMessages([]); setChatError(''); }}>
+                                <DeleteSweep sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                            onClick={() => setChatOpen(false)}>
+                            <Close sx={{ fontSize: 13 }} />
+                          </IconButton>
+                        </Box>
+                      </Box>
+
+                      {/* Message history */}
+                      <Box sx={{ px: 1.25, py: 1, maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {chatMessages.length === 0 && !chatSending && (
+                          <Box sx={{ textAlign: 'center', py: 2 }}>
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
+                              Ask anything about the{' '}
+                              {selectedItemIds.size > 0
+                                ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                                : `${integrationItems.length} linked item${integrationItems.length > 1 ? 's' : ''}`}…
+                            </Typography>
+                            <Box display="flex" flexWrap="wrap" gap={0.5} justifyContent="center" mt={1.25}>
+                              {['Summarize the current status', 'What are the blockers?', 'Who is working on what?', 'What should we do next?'].map(hint => (
+                                <Chip key={hint} label={hint} size="small"
+                                  onClick={() => setChatInput(hint)}
+                                  sx={{ fontSize: '0.66rem', height: 20, cursor: 'pointer', bgcolor: '#eff6ff', color: '#4f46e5', '&:hover': { bgcolor: '#e0e7ff' } }} />
+                              ))}
+                            </Box>
+                          </Box>
+                        )}
+                        {chatMessages.map((msg, idx) => (
+                          <Box key={idx} display="flex" justifyContent={msg.role === 'user' ? 'flex-end' : 'flex-start'}>
+                            <Box sx={{
+                              maxWidth: '88%', px: 1.25, py: 0.75,
+                              borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                              bgcolor: msg.role === 'user' ? '#6366f1' : '#f1f5f9',
+                              color: msg.role === 'user' ? '#fff' : 'text.primary',
+                            }}>
+                              <Typography variant="caption"
+                                sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.76rem' }}>
+                                {msg.content}
+                              </Typography>
+                            </Box>
+                          </Box>
+                        ))}
+                        {chatSending && (
+                          <Box display="flex" alignItems="center" gap={0.75} pl={0.5}>
+                            <CircularProgress size={11} sx={{ color: '#6366f1' }} />
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.72rem' }}>Thinking…</Typography>
+                          </Box>
+                        )}
+                        {chatError && (
+                          <Typography variant="caption" color="error.main" sx={{ px: 0.5, fontSize: '0.72rem' }}>{chatError}</Typography>
+                        )}
+                        <div ref={chatBottomRef} />
+                      </Box>
+
+                      {/* Input area */}
+                      <Box sx={{ px: 1.25, pb: 1.25, pt: 0.5, borderTop: '1px solid #e0e7ff' }}>
+                        <Box display="flex" gap={0.75} alignItems="flex-end">
+                          <TextField
+                            fullWidth size="small" multiline maxRows={4}
+                            placeholder="Ask about these documents… (Enter to send, Shift+Enter for newline)"
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChatMessage(); } }}
+                            disabled={chatSending}
+                            sx={{ '& textarea': { fontSize: '0.82rem' }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+                          />
+                          <Tooltip title="Send (Enter)">
+                            <span>
+                              <IconButton
+                                onClick={handleSendChatMessage}
+                                disabled={!chatInput.trim() || chatSending}
+                                sx={{ p: 1, mb: 0.1, flexShrink: 0, color: '#6366f1', '&:disabled': { color: 'text.disabled' } }}
+                              >
+                                <Send sx={{ fontSize: 18 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Add form */}
+                  {showIntForm && (
+                    <Box sx={{ p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', mb: 1.5 }}>
+                      {/* Type toggle */}
+                      <Box display="flex" gap={0.75} mb={1.25}>
+                        {['JIRA', 'CONFLUENCE'].map(t => (
+                          <Box
+                            key={t}
+                            onClick={() => { setIntAddType(t); setIntInput(''); setIntError(''); }}
+                            sx={{
+                              px: 1.25, py: 0.4, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+                              border: `1.5px solid ${intAddType === t ? '#0052cc' : '#e2e8f0'}`,
+                              bgcolor: intAddType === t ? '#eff6ff' : '#fff',
+                              color: intAddType === t ? '#0052cc' : 'text.secondary',
+                              transition: 'all 0.12s',
+                            }}
+                          >
+                            {t === 'JIRA' ? '🔵 JIRA Ticket' : '📄 Confluence Page'}
+                          </Box>
+                        ))}
+                      </Box>
+                      <Box display="flex" gap={1} alignItems="flex-start">
+                        <TextField
+                          autoFocus
+                          size="small"
+                          placeholder={intAddType === 'JIRA' ? 'e.g. PROJ-123' : 'Page URL or numeric page ID'}
+                          value={intInput}
+                          onChange={e => setIntInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handleAddIntegration(); if (e.key === 'Escape') setShowIntForm(false); }}
+                          sx={{ flex: 1, '& input': { fontSize: '0.82rem' } }}
+                          inputProps={intAddType === 'JIRA' ? { style: { textTransform: 'uppercase' } } : {}}
+                        />
+                        <Button size="small" variant="contained" onClick={handleAddIntegration}
+                          disabled={intAdding || !intInput.trim()}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          {intAdding ? <CircularProgress size={14} /> : 'Fetch & Link'}
+                        </Button>
+                        <Button size="small" variant="outlined"
+                          onClick={() => { setShowIntForm(false); setIntError(''); }}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          Cancel
+                        </Button>
+                      </Box>
+                      {intError && (
+                        <Typography variant="caption" color="error.main" display="block" mt={0.75}>{intError}</Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* Item list */}
+                  {integrationItems.length === 0 && !showIntForm && (
+                    <Typography variant="caption" color="text.disabled">
+                      No JIRA tickets or Confluence pages linked.
+                    </Typography>
+                  )}
+
+                  <Box display="flex" flexDirection="column" gap={1}>
+                    {integrationItems.map(item => {
+                      let data = null;
+                      try { data = JSON.parse(item.cachedData || '{}'); } catch {}
+                      const isJira = item.type === 'JIRA';
+
+                      const statusColor = (() => {
+                        const cat = (data?.statusCategory || '').toLowerCase();
+                        if (cat === 'done') return { color: '#065f46', bg: '#d1fae5' };
+                        if (cat === 'in progress') return { color: '#1d4ed8', bg: '#dbeafe' };
+                        return { color: '#475569', bg: '#f1f5f9' };
+                      })();
+
+                      const isSelected = selectedItemIds.has(item.id);
+                      return (
+                        <Box key={item.id} sx={{
+                          p: 1.5, borderRadius: 2,
+                          border: `1.5px solid ${isSelected ? '#a78bfa' : isJira ? '#dbeafe' : '#e0f2fe'}`,
+                          bgcolor: isSelected ? '#fdf4ff' : isJira ? '#fafbff' : '#f0f9ff',
+                          '&:hover': { borderColor: isSelected ? '#8b5cf6' : '#0052cc55', boxShadow: '0 1px 6px rgba(0,82,204,0.07)' },
+                          transition: 'all 0.15s',
+                        }}>
+                          {/* Header row: checkbox + type badge + key/link + actions */}
+                          <Box display="flex" alignItems="center" gap={0.75} mb={0.4}>
+                            <Checkbox
+                              size="small"
+                              checked={isSelected}
+                              onChange={() => setSelectedItemIds(prev => {
+                                const n = new Set(prev);
+                                if (n.has(item.id)) n.delete(item.id); else n.add(item.id);
+                                return n;
+                              })}
+                              sx={{ p: 0.25, mr: -0.5, color: '#c4b5fd', '&.Mui-checked': { color: '#7c3aed' } }}
+                            />
+                            <Chip
+                              label={isJira ? 'JIRA' : 'Confluence'}
+                              size="small"
+                              sx={{
+                                height: 16, fontSize: '0.58rem', fontWeight: 700, border: 0,
+                                bgcolor: isJira ? '#0052cc' : '#0077b6',
+                                color: '#fff',
+                              }}
+                            />
+                            <Typography
+                              variant="caption"
+                              component="a"
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              fontWeight={700}
+                              sx={{ color: '#0052cc', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                            >
+                              {isJira ? item.key : (data?.spaceKey ? `${data.spaceKey} › ${item.key}` : item.key)}
+                            </Typography>
+                            <OpenInNew sx={{ fontSize: 10, color: '#0052cc' }} />
+                            {isJira && data?.issueType && (
+                              <Chip label={data.issueType} size="small"
+                                sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+                            )}
+                            {isJira && data?.status && (
+                              <Chip label={data.status} size="small"
+                                sx={{ height: 15, fontSize: '0.58rem', bgcolor: statusColor.bg, color: statusColor.color, border: 0, ml: 'auto' }} />
+                            )}
+                            {!isJira && data?.space && (
+                              <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto', fontSize: '0.62rem' }}>
+                                {data.space}
+                              </Typography>
+                            )}
+                            {/* Actions */}
+                            <Box display="flex" gap={0.25} sx={{ ml: isJira && data?.status ? 0 : 'auto' }}>
+                              <Tooltip title={isJira
+                                ? (childrenMap[item.id] ? 'Reload child tickets' : 'Fetch child tickets')
+                                : (childrenMap[item.id] ? 'Reload child pages' : 'Fetch child pages')}>
+                                <IconButton
+                                  size="small"
+                                  sx={{ p: 0.25, color: fetchingChildrenId === item.id ? '#7c3aed' : 'text.secondary' }}
+                                  onClick={() => handleFetchChildren(item)}
+                                  disabled={fetchingChildrenId === item.id}
+                                >
+                                  {fetchingChildrenId === item.id
+                                    ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} />
+                                    : <AccountTree sx={{ fontSize: 13 }} />}
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="AI actions">
+                                <IconButton
+                                  size="small"
+                                  sx={{ p: 0.25, color: '#7c3aed', opacity: itemAiMap[item.id]?.loading ? 1 : 0.45, '&:hover': { opacity: 1 } }}
+                                  onClick={(e) => setAiMenuAnchor({ el: e.currentTarget, itemId: item.id })}
+                                  disabled={itemAiMap[item.id]?.loading}
+                                >
+                                  {itemAiMap[item.id]?.loading
+                                    ? <CircularProgress size={11} sx={{ color: '#7c3aed' }} />
+                                    : <AutoFixHigh sx={{ fontSize: 13 }} />}
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Refresh">
+                                <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary' }}
+                                  onClick={() => handleRefreshIntegration(item.id)}
+                                  disabled={refreshingId === item.id}>
+                                  {refreshingId === item.id
+                                    ? <CircularProgress size={11} />
+                                    : <Refresh sx={{ fontSize: 13 }} />}
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Remove">
+                                <IconButton size="small"
+                                  sx={{ p: 0.25, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                                  onClick={() => handleRemoveIntegration(item.id)}>
+                                  <LinkOff sx={{ fontSize: 13 }} />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+                          </Box>
+
+                          {/* Title / Summary */}
+                          <Typography variant="body2" fontWeight={600} mb={0.4} sx={{ color: '#1e293b', lineHeight: 1.3 }}>
+                            {isJira ? data?.summary : data?.title}
+                          </Typography>
+
+                          {/* Description / Excerpt */}
+                          {(isJira ? data?.description : data?.excerpt) && (
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              display: '-webkit-box', WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                              lineHeight: 1.5,
+                            }}>
+                              {isJira ? data.description : data.excerpt}
+                            </Typography>
+                          )}
+
+                          {/* Meta */}
+                          <Box display="flex" flexWrap="wrap" gap={1} mt={0.5}>
+                            {isJira && data?.priority && (
+                              <Typography variant="caption" color="text.disabled">
+                                Priority: <b>{data.priority}</b>
+                              </Typography>
+                            )}
+                            {isJira && data?.assignee && (
+                              <Typography variant="caption" color="text.disabled">
+                                Assignee: <b>{data.assignee}</b>
+                              </Typography>
+                            )}
+                            {!isJira && data?.version && (
+                              <Typography variant="caption" color="text.disabled">
+                                v{data.version}
+                              </Typography>
+                            )}
+                            {(isJira ? data?.updated : data?.lastUpdated) && (
+                              <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+                                Updated {format(new Date(isJira ? data.updated : data.lastUpdated), 'MMM d, yyyy')}
+                              </Typography>
+                            )}
+                          </Box>
+
+                          {/* JIRA Labels */}
+                          {isJira && data?.labels?.length > 0 && (
+                            <Box display="flex" flexWrap="wrap" gap={0.5} mt={0.5}>
+                              {data.labels.map(lbl => (
+                                <Chip key={lbl} label={lbl} size="small"
+                                  sx={{ height: 15, fontSize: '0.58rem', bgcolor: '#f1f5f9', color: 'text.secondary', border: 0 }} />
+                              ))}
+                            </Box>
+                          )}
+
+                          {/* Confluence breadcrumb */}
+                          {!isJira && data?.ancestors?.length > 0 && (
+                            <Typography variant="caption" color="text.disabled" display="block" mt={0.4} sx={{ fontSize: '0.62rem' }}>
+                              {data.ancestors.join(' › ')}
+                            </Typography>
+                          )}
+
+                          {/* Children (JIRA sub-tickets or Confluence child pages) */}
+                          {childrenMap[item.id] !== undefined && (
+                            <Box mt={0.75}>
+                              <Box
+                                display="flex" alignItems="center" gap={0.5}
+                                sx={{ cursor: 'pointer', userSelect: 'none' }}
+                                onClick={() => toggleExpandChildren(item.id)}
+                              >
+                                {expandedChildren[item.id]
+                                  ? <ExpandLess sx={{ fontSize: 13, color: 'text.secondary' }} />
+                                  : <ExpandMore sx={{ fontSize: 13, color: 'text.secondary' }} />}
+                                <Typography variant="caption" fontWeight={600} color="text.secondary" sx={{ fontSize: '0.68rem' }}>
+                                  {childrenMap[item.id].length === 0
+                                    ? (isJira ? 'No child tickets' : 'No child pages')
+                                    : `${childrenMap[item.id].length} child ${isJira
+                                        ? `ticket${childrenMap[item.id].length > 1 ? 's' : ''}`
+                                        : `page${childrenMap[item.id].length > 1 ? 's' : ''}`}`}
+                                </Typography>
+                              </Box>
+                              {expandedChildren[item.id] && childrenMap[item.id].length > 0 && (
+                                <Box mt={0.5} pl={0.5}
+                                  sx={{ borderLeft: `2px solid ${isJira ? '#dbeafe' : '#bae6fd'}` }}
+                                  display="flex" flexDirection="column" gap={0.5}>
+                                  {isJira ? childrenMap[item.id].map(child => {
+                                    const childCat = (child.statusCategory || '').toLowerCase();
+                                    const childStatusColor = childCat === 'done'
+                                      ? { color: '#065f46', bg: '#d1fae5' }
+                                      : childCat === 'in progress'
+                                        ? { color: '#1d4ed8', bg: '#dbeafe' }
+                                        : { color: '#475569', bg: '#f1f5f9' };
+                                    return (
+                                      <Box key={child.key} sx={{ pl: 1 }}>
+                                        <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                                          <Typography variant="caption" component="a" href={child.url}
+                                            target="_blank" rel="noopener noreferrer" fontWeight={700}
+                                            sx={{ color: '#0052cc', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                                            {child.key}
+                                          </Typography>
+                                          {child.issueType && (
+                                            <Chip label={child.issueType} size="small"
+                                              sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+                                          )}
+                                          <Chip label={child.status || '?'} size="small"
+                                            sx={{ height: 13, fontSize: '0.56rem', bgcolor: childStatusColor.bg, color: childStatusColor.color, border: 0 }} />
+                                          {child.assignee && (
+                                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.62rem' }}>
+                                              {child.assignee}
+                                            </Typography>
+                                          )}
+                                        </Box>
+                                        {child.summary && (
+                                          <Typography variant="caption" color="text.primary"
+                                            sx={{ fontSize: '0.7rem', display: 'block', lineHeight: 1.35, mt: 0.1 }}>
+                                            {child.summary}
+                                          </Typography>
+                                        )}
+                                      </Box>
+                                    );
+                                  }) : childrenMap[item.id].map(page => (
+                                    <Box key={page.id} sx={{ pl: 1 }}>
+                                      <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                                        <Typography variant="caption" component="a" href={page.url}
+                                          target="_blank" rel="noopener noreferrer" fontWeight={700}
+                                          sx={{ color: '#0077b6', textDecoration: 'none', fontSize: '0.7rem', '&:hover': { textDecoration: 'underline' } }}>
+                                          {page.title}
+                                        </Typography>
+                                        {page.spaceKey && (
+                                          <Chip label={page.spaceKey} size="small"
+                                            sx={{ height: 13, fontSize: '0.56rem', bgcolor: '#e0f2fe', color: '#0077b6', border: 0 }} />
+                                        )}
+                                      </Box>
+                                      {page.excerpt && (
+                                        <Typography variant="caption" color="text.secondary"
+                                          sx={{ fontSize: '0.68rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.35, mt: 0.1 }}>
+                                          {page.excerpt}
+                                        </Typography>
+                                      )}
+                                    </Box>
+                                  ))}
+                                </Box>
+                              )}
+                            </Box>
+                          )}
+
+                          {/* Per-item AI result */}
+                          {itemAiMap[item.id]?.open && (
+                            <Box mt={1} sx={{ p: 1.25, borderRadius: 1.5, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+                              <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.5}>
+                                <Typography variant="caption" fontWeight={700} color="#7c3aed" sx={{ fontSize: '0.7rem' }}>
+                                  {AI_ACTIONS.find(a => a.value === itemAiMap[item.id]?.action)?.emoji || '✨'}{' '}
+                                  {itemAiMap[item.id]?.actionLabel || 'AI Result'}
+                                </Typography>
+                                <IconButton size="small" sx={{ p: 0.2 }}
+                                  onClick={() => setItemAiMap(prev => ({ ...prev, [item.id]: { ...prev[item.id], open: false } }))}>
+                                  <Close sx={{ fontSize: 12 }} />
+                                </IconButton>
+                              </Box>
+                              {itemAiMap[item.id]?.loading && (
+                                <Box display="flex" alignItems="center" gap={0.75}>
+                                  <CircularProgress size={12} sx={{ color: '#7c3aed' }} />
+                                  <Typography variant="caption" color="text.secondary">Running…</Typography>
+                                </Box>
+                              )}
+                              {itemAiMap[item.id]?.error && (
+                                <Typography variant="caption" color="error.main">{itemAiMap[item.id].error}</Typography>
+                              )}
+                              {itemAiMap[item.id]?.text && (
+                                <Typography variant="caption" color="text.primary"
+                                  sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.75rem' }}>
+                                  {itemAiMap[item.id].text}
+                                </Typography>
+                              )}
+                            </Box>
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+
+                  {/* AI actions dropdown menu (shared across all cards) */}
+                  <Menu
+                    anchorEl={aiMenuAnchor?.el}
+                    open={Boolean(aiMenuAnchor)}
+                    onClose={() => setAiMenuAnchor(null)}
+                    PaperProps={{ sx: { minWidth: 240, py: 0.5 } }}
+                  >
+                    {AI_ACTIONS.map(a => (
+                      <MenuItem
+                        key={a.value}
+                        sx={{ fontSize: '0.82rem', gap: 1, py: 0.75 }}
+                        onClick={() => {
+                          const target = integrationItems.find(i => i.id === aiMenuAnchor?.itemId);
+                          if (target) handleRunAiAction(target, a.value);
+                          setAiMenuAnchor(null);
+                        }}
+                      >
+                        <span style={{ width: 22, display: 'inline-block', textAlign: 'center', fontSize: '1rem' }}>{a.emoji}</span>
+                        {a.label}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </>}
+
                 {/* Created by */}
                 {detail.createdBy && (
                   <>
@@ -681,13 +1804,332 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                     </Box>
                   ))
                 )}
+
+                <Divider sx={{ my: 2.5 }} />
+
+                {/* ── JIRA & Confluence ── */}
+                <>
+                  {/* Top bar */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <BugReport sx={{ fontSize: 14, color: '#0052cc' }} />
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        JIRA &amp; CONFLUENCE
+                      </Typography>
+                      {integrationItems.length > 0 && (
+                        <Chip label={integrationItems.length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#eff6ff', color: '#1d4ed8', border: 0 }} />
+                      )}
+                    </Box>
+                    {integrationItems.length > 0 && (
+                      <Tooltip title={chatOpen ? 'Close chat' : 'Chat with linked documents'}>
+                        <Button
+                          size="small"
+                          startIcon={<Chat sx={{ fontSize: '13px !important' }} />}
+                          onClick={() => setChatOpen(v => !v)}
+                          sx={{
+                            fontSize: '0.72rem', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0,
+                            color: chatOpen ? '#fff' : '#6366f1',
+                            bgcolor: chatOpen ? '#6366f1' : 'transparent',
+                            '&:hover': { bgcolor: chatOpen ? '#4f46e5' : '#eff6ff' },
+                          }}
+                        >
+                          Chat
+                        </Button>
+                      </Tooltip>
+                    )}
+                  </Box>
+
+                  {/* Selection toolbar */}
+                  {selectedItemIds.size > 0 && (
+                    <Box display="flex" alignItems="center" gap={1} mb={1.25} px={1} py={0.75}
+                      sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, border: '1px solid #bae6fd', flexWrap: 'wrap' }}>
+                      <Typography variant="caption" fontWeight={700} color="#0369a1" sx={{ flexShrink: 0 }}>
+                        {selectedItemIds.size} selected
+                      </Typography>
+                      <Select
+                        size="small"
+                        value={consolidatedAi.action}
+                        onChange={e => setConsolidatedAi(prev => ({ ...prev, action: e.target.value }))}
+                        sx={{ fontSize: '0.72rem', flex: 1, minWidth: 150, '& .MuiSelect-select': { py: 0.4, px: 1 } }}
+                      >
+                        {AI_ACTIONS.map(a => (
+                          <MenuItem key={a.value} value={a.value} sx={{ fontSize: '0.8rem', gap: 1 }}>
+                            {a.emoji} {a.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <Button
+                        size="small" variant="contained"
+                        onClick={handleConsolidatedAiAction}
+                        disabled={consolidatedAi.loading}
+                        sx={{ fontSize: '0.72rem', textTransform: 'none', flexShrink: 0, bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, py: 0.4 }}
+                      >
+                        {consolidatedAi.loading ? <CircularProgress size={12} sx={{ color: '#fff' }} /> : 'Run ✨'}
+                      </Button>
+                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setSelectedItemIds(new Set())}>
+                        <Close sx={{ fontSize: 13 }} />
+                      </IconButton>
+                    </Box>
+                  )}
+
+                  {/* Consolidated AI result */}
+                  {consolidatedAi.open && (
+                    <Box sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: '1.5px solid #ddd6fe', bgcolor: '#faf5ff' }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                        <Typography variant="caption" fontWeight={700} color="#7c3aed">
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.emoji || '✨'}{' '}
+                          {AI_ACTIONS.find(a => a.value === consolidatedAi.action)?.label || 'AI Result'}
+                          {selectedItemIds.size > 0 && ` — ${selectedItemIds.size} items`}
+                        </Typography>
+                        <IconButton size="small" sx={{ p: 0.25 }}
+                          onClick={() => setConsolidatedAi(prev => ({ ...prev, open: false }))}>
+                          <Close sx={{ fontSize: 13 }} />
+                        </IconButton>
+                      </Box>
+                      {consolidatedAi.loading && (
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <CircularProgress size={13} sx={{ color: '#7c3aed' }} />
+                          <Typography variant="caption" color="text.secondary">Running…</Typography>
+                        </Box>
+                      )}
+                      {consolidatedAi.error && <Typography variant="caption" color="error.main">{consolidatedAi.error}</Typography>}
+                      {consolidatedAi.text && (
+                        <Typography variant="caption" color="text.primary"
+                          sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.78rem' }}>
+                          {consolidatedAi.text}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* Chat panel */}
+                  {chatOpen && integrationItems.length > 0 && (
+                    <Box sx={{ mb: 1.5, borderRadius: 2, border: '1.5px solid #c7d2fe', bgcolor: '#fafbff', overflow: 'hidden' }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between"
+                        sx={{ px: 1.5, py: 0.75, bgcolor: '#6366f1', borderBottom: '1px solid #c7d2fe' }}>
+                        <Box display="flex" alignItems="center" gap={0.75}>
+                          <Chat sx={{ fontSize: 13, color: '#fff' }} />
+                          <Typography variant="caption" fontWeight={700} color="#fff" sx={{ fontSize: '0.72rem' }}>
+                            Chat —{' '}
+                            {selectedItemIds.size > 0
+                              ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                              : `all ${integrationItems.length} item${integrationItems.length > 1 ? 's' : ''}`}
+                          </Typography>
+                        </Box>
+                        <Box display="flex" alignItems="center">
+                          {chatMessages.length > 0 && (
+                            <Tooltip title="Clear conversation">
+                              <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                                onClick={() => { setChatMessages([]); setChatError(''); }}>
+                                <DeleteSweep sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <IconButton size="small" sx={{ p: 0.25, color: '#c7d2fe', '&:hover': { color: '#fff' } }}
+                            onClick={() => setChatOpen(false)}>
+                            <Close sx={{ fontSize: 13 }} />
+                          </IconButton>
+                        </Box>
+                      </Box>
+                      <Box sx={{ px: 1.25, py: 1, maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {chatMessages.length === 0 && !chatSending && (
+                          <Box sx={{ textAlign: 'center', py: 2 }}>
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
+                              Ask anything about the{' '}
+                              {selectedItemIds.size > 0
+                                ? `${selectedItemIds.size} selected item${selectedItemIds.size > 1 ? 's' : ''}`
+                                : `${integrationItems.length} linked item${integrationItems.length > 1 ? 's' : ''}`}…
+                            </Typography>
+                            <Box display="flex" flexWrap="wrap" gap={0.5} justifyContent="center" mt={1.25}>
+                              {['Summarize the current status', 'What are the blockers?', 'Who is working on what?', 'What should we do next?'].map(hint => (
+                                <Chip key={hint} label={hint} size="small"
+                                  onClick={() => setChatInput(hint)}
+                                  sx={{ fontSize: '0.66rem', height: 20, cursor: 'pointer', bgcolor: '#eff6ff', color: '#4f46e5', '&:hover': { bgcolor: '#e0e7ff' } }} />
+                              ))}
+                            </Box>
+                          </Box>
+                        )}
+                        {chatMessages.map((msg, idx) => (
+                          <Box key={idx} display="flex" justifyContent={msg.role === 'user' ? 'flex-end' : 'flex-start'}>
+                            <Box sx={{
+                              maxWidth: '88%', px: 1.25, py: 0.75,
+                              borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                              bgcolor: msg.role === 'user' ? '#6366f1' : '#f1f5f9',
+                              color: msg.role === 'user' ? '#fff' : 'text.primary',
+                            }}>
+                              <Typography variant="caption"
+                                sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.65, display: 'block', fontSize: '0.76rem' }}>
+                                {msg.content}
+                              </Typography>
+                            </Box>
+                          </Box>
+                        ))}
+                        {chatSending && (
+                          <Box display="flex" alignItems="center" gap={0.75} pl={0.5}>
+                            <CircularProgress size={11} sx={{ color: '#6366f1' }} />
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.72rem' }}>Thinking…</Typography>
+                          </Box>
+                        )}
+                        {chatError && (
+                          <Typography variant="caption" color="error.main" sx={{ px: 0.5, fontSize: '0.72rem' }}>{chatError}</Typography>
+                        )}
+                        <div ref={chatBottomRef} />
+                      </Box>
+                      <Box sx={{ px: 1.25, pb: 1.25, pt: 0.5, borderTop: '1px solid #e0e7ff' }}>
+                        <Box display="flex" gap={0.75} alignItems="flex-end">
+                          <TextField
+                            fullWidth size="small" multiline maxRows={4}
+                            placeholder="Ask about these documents… (Enter to send, Shift+Enter for newline)"
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChatMessage(); } }}
+                            disabled={chatSending}
+                            sx={{ '& textarea': { fontSize: '0.82rem' }, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+                          />
+                          <Tooltip title="Send (Enter)">
+                            <span>
+                              <IconButton
+                                onClick={handleSendChatMessage}
+                                disabled={!chatInput.trim() || chatSending}
+                                sx={{ p: 1, mb: 0.1, flexShrink: 0, color: '#6366f1', '&:disabled': { color: 'text.disabled' } }}
+                              >
+                                <Send sx={{ fontSize: 18 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Add form */}
+                  {showIntForm && (
+                    <Box sx={{ p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', mb: 1.5 }}>
+                      <Box display="flex" gap={0.75} mb={1.25}>
+                        {['JIRA', 'CONFLUENCE'].map(t => (
+                          <Box
+                            key={t}
+                            onClick={() => { setIntAddType(t); setIntInput(''); setIntError(''); }}
+                            sx={{
+                              px: 1.25, py: 0.4, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+                              border: `1.5px solid ${intAddType === t ? '#0052cc' : '#e2e8f0'}`,
+                              bgcolor: intAddType === t ? '#eff6ff' : '#fff',
+                              color: intAddType === t ? '#0052cc' : 'text.secondary',
+                              transition: 'all 0.12s',
+                            }}
+                          >
+                            {t === 'JIRA' ? '🔵 JIRA Ticket' : '📄 Confluence Page'}
+                          </Box>
+                        ))}
+                      </Box>
+                      <Box display="flex" gap={1} alignItems="flex-start">
+                        <TextField
+                          autoFocus size="small"
+                          placeholder={intAddType === 'JIRA' ? 'e.g. PROJ-123' : 'Page URL or numeric page ID'}
+                          value={intInput}
+                          onChange={e => setIntInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handleAddIntegration(); if (e.key === 'Escape') setShowIntForm(false); }}
+                          sx={{ flex: 1, '& input': { fontSize: '0.82rem' } }}
+                          inputProps={intAddType === 'JIRA' ? { style: { textTransform: 'uppercase' } } : {}}
+                        />
+                        <Button size="small" variant="contained" onClick={handleAddIntegration}
+                          disabled={intAdding || !intInput.trim()}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          {intAdding ? <CircularProgress size={14} /> : 'Fetch & Link'}
+                        </Button>
+                        <Button size="small" variant="outlined"
+                          onClick={() => { setShowIntForm(false); setIntError(''); }}
+                          sx={{ fontSize: '0.78rem', textTransform: 'none', flexShrink: 0 }}>
+                          Cancel
+                        </Button>
+                      </Box>
+                      {intError && (
+                        <Typography variant="caption" color="error.main" display="block" mt={0.75}>{intError}</Typography>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* ── JIRA Tickets ── */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75} mt={0.5}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <Typography variant="caption" fontWeight={700} sx={{ color: '#0052cc' }}>🔵 JIRA Tickets</Typography>
+                      {integrationItems.filter(i => i.type === 'JIRA').length > 0 && (
+                        <Chip label={integrationItems.filter(i => i.type === 'JIRA').length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#dbeafe', color: '#1d4ed8', border: 0 }} />
+                      )}
+                    </Box>
+                    <Button size="small" startIcon={<Add sx={{ fontSize: '13px !important' }} />}
+                      onClick={() => { setIntAddType('JIRA'); setShowIntForm(true); setIntError(''); setIntInput(''); }}
+                      sx={{ fontSize: '0.72rem', textTransform: 'none', color: '#0052cc', py: 0.25, px: 0.75, minWidth: 0 }}>
+                      Ticket
+                    </Button>
+                  </Box>
+                  {integrationItems.filter(i => i.type === 'JIRA').length === 0 && !showIntForm && (
+                    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+                      No JIRA tickets linked.
+                    </Typography>
+                  )}
+                  <Box display="flex" flexDirection="column" gap={1} mb={0.5}>
+                    {integrationItems.filter(i => i.type === 'JIRA').map(renderIntItem)}
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  {/* ── Confluence Pages ── */}
+                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.75}>
+                    <Box display="flex" alignItems="center" gap={0.75}>
+                      <Typography variant="caption" fontWeight={700} sx={{ color: '#0077b6' }}>📄 Confluence Pages</Typography>
+                      {integrationItems.filter(i => i.type !== 'JIRA').length > 0 && (
+                        <Chip label={integrationItems.filter(i => i.type !== 'JIRA').length} size="small"
+                          sx={{ height: 16, fontSize: '0.6rem', bgcolor: '#bae6fd', color: '#0077b6', border: 0 }} />
+                      )}
+                    </Box>
+                    <Button size="small" startIcon={<Add sx={{ fontSize: '13px !important' }} />}
+                      onClick={() => { setIntAddType('CONFLUENCE'); setShowIntForm(true); setIntError(''); setIntInput(''); }}
+                      sx={{ fontSize: '0.72rem', textTransform: 'none', color: '#0077b6', py: 0.25, px: 0.75, minWidth: 0 }}>
+                      Page
+                    </Button>
+                  </Box>
+                  {integrationItems.filter(i => i.type !== 'JIRA').length === 0 && !showIntForm && (
+                    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+                      No Confluence pages linked.
+                    </Typography>
+                  )}
+                  <Box display="flex" flexDirection="column" gap={1}>
+                    {integrationItems.filter(i => i.type !== 'JIRA').map(renderIntItem)}
+                  </Box>
+
+                  {/* AI actions dropdown menu */}
+                  <Menu
+                    anchorEl={aiMenuAnchor?.el}
+                    open={Boolean(aiMenuAnchor)}
+                    onClose={() => setAiMenuAnchor(null)}
+                    PaperProps={{ sx: { minWidth: 240, py: 0.5 } }}
+                  >
+                    {AI_ACTIONS.map(a => (
+                      <MenuItem
+                        key={a.value}
+                        sx={{ fontSize: '0.82rem', gap: 1, py: 0.75 }}
+                        onClick={() => {
+                          const target = integrationItems.find(i => i.id === aiMenuAnchor?.itemId);
+                          if (target) handleRunAiAction(target, a.value);
+                          setAiMenuAnchor(null);
+                        }}
+                      >
+                        <span style={{ width: 22, display: 'inline-block', textAlign: 'center', fontSize: '1rem' }}>{a.emoji}</span>
+                        {a.label}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </>
               </Box>
             </TabPanel>
 
             {/* ── COMMENTS ── */}
             <TabPanel value={tab} idx={2}>
               <Box sx={{ px: 3, py: 2.5, display: 'flex', flexDirection: 'column', height: '100%' }}>
-                {/* Comment list */}
+                {/* Comment list — minimised cards */}
                 <Box flex={1} mb={2}>
                   {comments.length === 0 ? (
                     <Box textAlign="center" py={4}>
@@ -695,67 +2137,93 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
                       <Typography variant="body2" color="text.disabled">No notes yet</Typography>
                     </Box>
                   ) : (
-                    comments.map(c => (
-                      <Box key={c.id} display="flex" gap={1.5} mb={2}>
-                        <Avatar sx={{ width: 28, height: 28, fontSize: '0.72rem', bgcolor: '#6366f1', flexShrink: 0 }}>
-                          {c.user?.name?.charAt(0) || '?'}
-                        </Avatar>
-                        <Box flex={1} minWidth={0}>
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Typography variant="caption" fontWeight={600}>{c.user?.name}</Typography>
-                            <Typography variant="caption" color="text.disabled">
-                              {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
-                            </Typography>
-                          </Box>
-                          {editingCommentId === c.id ? (
-                            <Box mt={0.5}>
-                              <TextField
+                    <Box display="flex" flexDirection="column" gap={1}>
+                      {comments.map(c => (
+                        editingCommentId === c.id ? (
+                          <Box key={c.id} sx={{ p: 1.5, borderRadius: 2, border: '1.5px solid #c7d2fe', bgcolor: '#fafbff' }}>
+                            <Box display="flex" alignItems="center" gap={1} mb={1}>
+                              <Avatar sx={{ width: 24, height: 24, fontSize: '0.65rem', bgcolor: '#6366f1' }}>
+                                {c.user?.name?.charAt(0) || '?'}
+                              </Avatar>
+                              <Typography variant="caption" fontWeight={700}>{c.user?.name}</Typography>
+                            </Box>
+                            <Box sx={{ mb: 1.5 }}>
+                              <RichEditor
                                 autoFocus fullWidth multiline size="small" value={editingCommentText}
                                 onChange={e => setEditingCommentText(e.target.value)}
                                 onKeyDown={e => { if (e.key === 'Escape') setEditingCommentId(null); }}
-                                sx={{ mb: 0.75 }}
+                                onSubmit={() => handleEditComment(c.id)}
                               />
-                              <Box display="flex" gap={0.75}>
-                                <Button size="small" variant="contained" onClick={() => handleEditComment(c.id)}>Save</Button>
-                                <Button size="small" variant="outlined" onClick={() => setEditingCommentId(null)}>Cancel</Button>
-                              </Box>
                             </Box>
-                          ) : (
-                            <Box
-                              sx={{
-                                mt: 0.25, p: 1.25, bgcolor: '#f8fafc', borderRadius: 2,
-                                border: '1px solid #f1f5f9', position: 'relative',
-                                '&:hover .comment-actions': { opacity: 1 },
-                              }}
-                            >
-                              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{c.content}</Typography>
-                              {c.user?.id === user?.id && (
-                                <Box className="comment-actions" sx={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.25 }}>
-                                  <IconButton size="small" sx={{ p: 0.25 }} onClick={() => { setEditingCommentId(c.id); setEditingCommentText(c.content); }}>
-                                    <Edit sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                  <IconButton size="small" sx={{ p: 0.25, color: 'error.main' }} onClick={() => handleDeleteComment(c.id)}>
-                                    <Delete sx={{ fontSize: 13 }} />
-                                  </IconButton>
+                            <Box display="flex" gap={0.75}>
+                              <Button size="small" variant="contained" sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+                                onClick={() => handleEditComment(c.id)}>Save</Button>
+                              <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
+                                onClick={() => setEditingCommentId(null)}>Cancel</Button>
+                            </Box>
+                          </Box>
+                        ) : (
+                          <Box
+                            key={c.id}
+                            onClick={() => setViewComment(c)}
+                            sx={{
+                              display: 'flex', alignItems: 'flex-start', gap: 1.25,
+                              p: 1.25, borderRadius: 2, border: '1px solid #e2e8f0',
+                              cursor: 'pointer',
+                              '&:hover': { borderColor: '#c7d2fe', bgcolor: '#fafbff' },
+                              '&:hover .note-delete-btn': { opacity: 1 },
+                              transition: 'all 0.13s',
+                            }}
+                          >
+                            <Avatar sx={{ width: 26, height: 26, fontSize: '0.68rem', bgcolor: '#6366f1', flexShrink: 0, mt: 0.1 }}>
+                              {c.user?.name?.charAt(0) || '?'}
+                            </Avatar>
+                            <Box flex={1} minWidth={0}>
+                              <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.3}>
+                                <Typography variant="caption" fontWeight={700} color="text.primary">{c.user?.name}</Typography>
+                                <Box display="flex" alignItems="center" gap={0.25}>
+                                  {c.user?.id === user?.id && (
+                                    <Tooltip title="Delete note">
+                                      <IconButton
+                                        className="note-delete-btn"
+                                        size="small"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          if (!window.confirm('Delete this note? This cannot be undone.')) return;
+                                          await handleDeleteComment(c.id);
+                                        }}
+                                        sx={{ opacity: 0, transition: 'opacity 0.15s', p: 0.25, color: '#94a3b8', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' } }}
+                                      >
+                                        <Delete sx={{ fontSize: 13 }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                  )}
+                                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, ml: 0.5 }}>
+                                    {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
+                                  </Typography>
                                 </Box>
-                              )}
+                              </Box>
+                              <Typography variant="caption" color="text.secondary"
+                                sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.5 }}>
+                                {stripMarkdown(c.content)}
+                              </Typography>
                             </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    ))
+                          </Box>
+                        )
+                      ))}
+                    </Box>
                   )}
                 </Box>
 
                 {/* New comment input */}
                 <Box sx={{ borderTop: '1px solid #f1f5f9', pt: 2 }}>
-                  <TextField
+                  <RichEditor
                     fullWidth
                     multiline
                     minRows={2}
                     maxRows={5}
                     size="small"
-                    placeholder="Add a note or comment…"
+                    placeholder="Add a note or comment… (Ctrl+Enter to send)"
                     value={commentText}
                     onChange={e => setCommentText(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSendComment(); }}
@@ -826,10 +2294,221 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
               </Box>
             </TabPanel>
 
+            {/* ── MEETING NOTES ── */}
+            <TabPanel value={tab} idx={4}>
+              <Box sx={{ px: 3, py: 2 }}>
+                {/* Tab header with Add button */}
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+                  <Typography variant="caption" fontWeight={700} color="text.disabled" letterSpacing={0.5} textTransform="uppercase">
+                    Linked Meetings
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<Add sx={{ fontSize: '14px !important' }} />}
+                    onClick={() => {
+                      setAddNoteSubject('');
+                      setAddNoteDate(new Date().toISOString().substring(0, 10));
+                      setAddNoteBody('');
+                      setAddNoteError(null);
+                      setAddNoteOpen(true);
+                    }}
+                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', borderColor: '#c7d2fe', color: '#6366f1', '&:hover': { bgcolor: '#f0f0ff' } }}
+                  >
+                    Add Note
+                  </Button>
+                </Box>
+                {meetingNotes.length === 0 ? (
+                  <Box textAlign="center" py={5}>
+                    <EventNote sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                    <Typography variant="body2" color="text.secondary">No meeting notes linked yet.</Typography>
+                    <Typography variant="caption" color="text.disabled">Add notes manually or save emails from the Meeting Notes page.</Typography>
+                  </Box>
+                ) : (
+                  <Box display="flex" flexDirection="column" gap={1.5}>
+                    {/* Summarize all button */}
+                    <Box display="flex" justifyContent="flex-end">
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={meetingSummaryLoading
+                          ? <CircularProgress size={13} sx={{ color: 'inherit' }} />
+                          : <AutoFixHigh sx={{ fontSize: '14px !important' }} />}
+                        disabled={meetingSummaryLoading}
+                        onClick={async () => {
+                          setMeetingSummaryLoading(true);
+                          setMeetingSummaryError(null);
+                          try {
+                            const res = await api.post('/ai/summarize-meetings', {
+                              initiativeTitle: detail?.title,
+                              notes: meetingNotes,
+                            });
+                            setMeetingSummaryTitle(`All Meetings Summary (${meetingNotes.length})`);
+                            setMeetingSummaryText(res.data.summary);
+                            setMeetingSummaryOpen(true);
+                          } catch (e) {
+                            setMeetingSummaryError(e.response?.data?.error || 'Failed to summarize');
+                          } finally {
+                            setMeetingSummaryLoading(false);
+                          }
+                        }}
+                        sx={{ bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' }, borderRadius: 2, textTransform: 'none', fontWeight: 600, fontSize: '0.78rem' }}
+                      >
+                        {meetingSummaryLoading ? 'Summarizing…' : `Summarize All (${meetingNotes.length})`}
+                      </Button>
+                    </Box>
+                    {meetingSummaryError && (
+                      <Typography variant="caption" color="error.main" sx={{ px: 0.5 }}>{meetingSummaryError}</Typography>
+                    )}
+                    {meetingNotes.map(note => (
+                      <Box
+                        key={note.id}
+                        onClick={() => {
+                          setEditNote(note);
+                          setEditNoteSubject(note.subject || '');
+                          setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
+                          setEditNoteBody(note.body || '');
+                          setEditNoteError(null);
+                        }}
+                        sx={{
+                          border: '1px solid #e2e8f0', borderRadius: 2, px: 2, py: 1.5,
+                          cursor: 'pointer',
+                          '&:hover': { bgcolor: '#f8f7ff', borderColor: '#c7d2fe' },
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
+                          <Typography variant="body2" fontWeight={700} color="#1e293b" mb={0.4} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.subject}</Typography>
+                          <Box display="flex" gap={0.25} sx={{ flexShrink: 0 }}>
+                            <Tooltip title="Summarize this note">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                disabled={summarizingNoteId === note.id}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  setSummarizingNoteId(note.id);
+                                  setMeetingSummaryError(null);
+                                  try {
+                                    const res = await api.post('/ai/summarize-meetings', {
+                                      initiativeTitle: detail?.title,
+                                      notes: [note],
+                                    });
+                                    setMeetingSummaryTitle(note.subject || 'Note Summary');
+                                    setMeetingSummaryText(res.data.summary);
+                                    setMeetingSummaryOpen(true);
+                                  } catch (e) {
+                                    setMeetingSummaryError(e.response?.data?.error || 'Failed to summarize');
+                                  } finally {
+                                    setSummarizingNoteId(null);
+                                  }
+                                }}
+                              >
+                                {summarizingNoteId === note.id
+                                  ? <CircularProgress size={12} />
+                                  : <AutoFixHigh sx={{ fontSize: 14 }} />}
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="View note">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                onClick={(e) => { e.stopPropagation(); setViewNote(note); }}
+                              >
+                                <Visibility sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Edit">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' }, p: 0.25 }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditNote(note);
+                                  setEditNoteSubject(note.subject || '');
+                                  setEditNoteDate(note.date ? note.date.substring(0, 10) : '');
+                                  setEditNoteBody(note.body || '');
+                                  setEditNoteError(null);
+                                }}
+                              >
+                                <Edit sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Delete note permanently">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#94a3b8', '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' }, p: 0.25 }}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!window.confirm(`Delete "${note.subject}"? This cannot be undone.`)) return;
+                                  try {
+                                    await api.delete(`/meeting-notes/${note.id}`);
+                                    setMeetingNotes(prev => prev.filter(n => n.id !== note.id));
+                                  } catch (e) { console.error(e); }
+                                }}
+                              >
+                                <Delete sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </Box>
+                        <Box display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
+                          {note.fromEmail && (
+                            <Typography variant="caption" color="#6366f1" fontWeight={600} noWrap>{note.fromEmail}</Typography>
+                          )}
+                          {note.date && (
+                            <Typography variant="caption" color="text.disabled">
+                              {format(new Date(note.date), 'MMM d, yyyy')}
+                            </Typography>
+                          )}
+                          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+                            Saved {formatDistanceToNow(new Date(note.createdAt), { addSuffix: true })}
+                          </Typography>
+                        </Box>
+                        {note.body && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', mt: 0.75, lineHeight: 1.5 }}
+                          >
+                            {note.body}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            </TabPanel>
+
           </Box>
         </>
-      )}
-    </Drawer>
+      );
+
+  return (
+    <>
+    {pageMode ? (
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', bgcolor: 'background.paper', borderRadius: 2, border: '1px solid #e2e8f0' }}>
+        {innerContent}
+      </Box>
+    ) : (
+      <Drawer
+        anchor="right"
+        open={open}
+        onClose={handleClose}
+        PaperProps={{
+          sx: {
+            width: { xs: '100vw', sm: 480 },
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid #e2e8f0',
+            boxShadow: '-4px 0 32px rgba(0,0,0,0.1)',
+          }
+        }}
+      >
+        {innerContent}
+      </Drawer>
+    )}
 
     {/* Quick create user dialog */}
     <Dialog open={quickUserOpen} onClose={() => setQuickUserOpen(false)} maxWidth="xs" fullWidth>
@@ -879,6 +2558,243 @@ export default function InitiativeDetailDrawer({ initiativeId, open, onClose }) 
       initiativeId={initiativeId}
       initiativeData={fullData || null}
     />
+
+    {/* View Comment */}
+    <Dialog open={!!viewComment} onClose={() => setViewComment(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 0.5 }}>
+        <Box display="flex" alignItems="center" gap={1.25}>
+          <Avatar sx={{ width: 28, height: 28, fontSize: '0.72rem', bgcolor: '#6366f1' }}>
+            {viewComment?.user?.name?.charAt(0) || '?'}
+          </Avatar>
+          <Box>
+            <Typography variant="subtitle2" fontWeight={700}>{viewComment?.user?.name}</Typography>
+            <Typography variant="caption" color="text.disabled">
+              {viewComment && formatDistanceToNow(new Date(viewComment.createdAt), { addSuffix: true })}
+            </Typography>
+          </Box>
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <RichText text={viewComment?.content} />
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}
+          onClick={() => setViewComment(null)}>Close</Button>
+        {viewComment?.user?.id === user?.id && (
+          <>
+            <Button size="small" variant="outlined" color="error"
+              sx={{ borderRadius: 2, textTransform: 'none', ml: 'auto' }}
+              onClick={async () => {
+                if (!window.confirm('Delete this note? This cannot be undone.')) return;
+                await handleDeleteComment(viewComment.id);
+                setViewComment(null);
+              }}>Delete</Button>
+            <Button size="small" variant="contained"
+              sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+              onClick={() => {
+                setEditingCommentId(viewComment.id);
+                setEditingCommentText(viewComment.content);
+                setViewComment(null);
+                setTab(2);
+              }}>Edit</Button>
+          </>
+        )}
+      </DialogActions>
+    </Dialog>
+
+    {/* Edit Meeting Note */}
+    <Dialog open={!!editNote} onClose={() => setEditNote(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Edit Meeting Note</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+        {editNoteError && (
+          <Typography variant="caption" color="error.main">{editNoteError}</Typography>
+        )}
+        <TextField
+          label="Title / Subject *"
+          size="small"
+          fullWidth
+          autoFocus
+          value={editNoteSubject}
+          onChange={e => setEditNoteSubject(e.target.value)}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <TextField
+          label="Date"
+          type="date"
+          size="small"
+          fullWidth
+          value={editNoteDate}
+          onChange={e => setEditNoteDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <Box sx={{ position: 'relative' }}>
+          <RichEditor
+            label="Notes"
+            size="small"
+            fullWidth
+            multiline
+            minRows={14}
+            maxRows={28}
+            value={editNoteBody}
+            onChange={e => setEditNoteBody(e.target.value)}
+            onSubmit={handleSaveEditNote}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
+          />
+          <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
+            <RephraseTool text={editNoteBody} onApply={v => setEditNoteBody(v)} />
+          </Box>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" onClick={() => setEditNote(null)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!editNoteSubject.trim() || editNoteSaving}
+          onClick={handleSaveEditNote}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+        >
+          {editNoteSaving ? 'Saving…' : 'Save Changes'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* View Meeting Note */}
+    <Dialog open={!!viewNote} onClose={() => setViewNote(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 0.5 }}>
+        {viewNote?.subject || 'Meeting Note'}
+      </DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <Box display="flex" flexWrap="wrap" gap={1.5} mb={2}>
+          {viewNote?.fromEmail && (
+            <Typography variant="caption" color="#6366f1" fontWeight={600}>{viewNote.fromEmail}</Typography>
+          )}
+          {viewNote?.date && (
+            <Typography variant="caption" color="text.disabled">
+              {format(new Date(viewNote.date), 'MMM d, yyyy')}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+            Saved {viewNote && formatDistanceToNow(new Date(viewNote.createdAt), { addSuffix: true })}
+          </Typography>
+        </Box>
+        {viewNote?.body ? (
+          <RichText text={viewNote.body} />
+        ) : (
+          <Typography variant="body2" color="text.disabled" fontStyle="italic">No content.</Typography>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button variant="outlined" size="small" sx={{ borderRadius: 2, textTransform: 'none' }}
+          onClick={() => setViewNote(null)}>Close</Button>
+        <Button variant="contained" size="small"
+          sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+          onClick={() => {
+            setEditNote(viewNote);
+            setEditNoteSubject(viewNote.subject || '');
+            setEditNoteDate(viewNote.date ? viewNote.date.substring(0, 10) : '');
+            setEditNoteBody(viewNote.body || '');
+            setEditNoteError(null);
+            setViewNote(null);
+          }}>Edit
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* Add Meeting Note manually */}
+    <Dialog open={addNoteOpen} onClose={() => setAddNoteOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Add Meeting Note</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+        {addNoteError && (
+          <Typography variant="caption" color="error.main">{addNoteError}</Typography>
+        )}
+        <TextField
+          label="Title / Subject *"
+          size="small"
+          fullWidth
+          autoFocus
+          value={addNoteSubject}
+          onChange={e => setAddNoteSubject(e.target.value)}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <TextField
+          label="Date"
+          type="date"
+          size="small"
+          fullWidth
+          value={addNoteDate}
+          onChange={e => setAddNoteDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+        <Box sx={{ position: 'relative' }}>
+          <RichEditor
+            label="Notes"
+            size="small"
+            fullWidth
+            multiline
+            minRows={5}
+            maxRows={14}
+            placeholder="Paste or type meeting notes here…"
+            value={addNoteBody}
+            onChange={e => setAddNoteBody(e.target.value)}
+            onSubmit={handleSaveAddNote}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: '0 0 8px 8px' } }}
+          />
+          <Box sx={{ position: 'absolute', bottom: 6, right: 6 }}>
+            <RephraseTool text={addNoteBody} onApply={v => setAddNoteBody(v)} />
+          </Box>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button size="small" onClick={() => setAddNoteOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!addNoteSubject.trim() || addNoteSaving}
+          onClick={handleSaveAddNote}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+        >
+          {addNoteSaving ? 'Saving…' : 'Save Note'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+
+    {/* Meetings Summary Dialog */}
+    <Dialog open={meetingSummaryOpen} onClose={() => setMeetingSummaryOpen(false)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <AutoFixHigh sx={{ color: '#6366f1', fontSize: 20 }} />
+        {meetingSummaryTitle || 'Meeting Summary'}
+      </DialogTitle>
+      <DialogContent sx={{ pt: '4px !important' }}>
+        <Box
+          sx={{
+            bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2,
+            px: 2.5, py: 2, whiteSpace: 'pre-wrap', fontFamily: 'inherit',
+            fontSize: '0.875rem', lineHeight: 1.7, color: '#1e293b', maxHeight: '60vh', overflowY: 'auto',
+          }}
+        >
+          {meetingSummaryText}
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+        <Button size="small" onClick={() => setMeetingSummaryOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Close</Button>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={meetingSummaryCopied ? <Done sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 14 }} />}
+          onClick={() => {
+            navigator.clipboard.writeText(meetingSummaryText);
+            setMeetingSummaryCopied(true);
+            setTimeout(() => setMeetingSummaryCopied(false), 2000);
+          }}
+          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, borderColor: '#6366f1', color: '#6366f1' }}
+        >
+          {meetingSummaryCopied ? 'Copied!' : 'Copy'}
+        </Button>
+      </DialogActions>
+    </Dialog>
     </>
   );
 }

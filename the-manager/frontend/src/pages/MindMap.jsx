@@ -38,7 +38,7 @@ import {
   Menu as MuiMenu,
   MenuItem as MuiMenuItem,
 } from '@mui/material';
-import { Add, List as ListIcon, Refresh, Label, PersonAdd, Download, SelectAll, CropFree, AutoFixHigh } from '@mui/icons-material';
+import { Add, List as ListIcon, Refresh, Label, PersonAdd, Download, SelectAll, CropFree, AutoFixHigh, Fullscreen, FullscreenExit, ChevronLeft, ChevronRight } from '@mui/icons-material';
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -167,6 +167,23 @@ function MindMapInner() {
   const [tagInput, setTagInput] = useState('');
   const [users, setUsers] = useState([]);
   const [selectedRootId, setSelectedRootId] = useState(null);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const splitPanelRef = useRef(null);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      splitPanelRef.current?.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   const allTags = useMemo(
     () => [...new Set((allItems || []).flatMap(i => i.tags || []))].sort(),
@@ -624,27 +641,45 @@ function MindMapInner() {
       <CanvasSelector screen="mindmap" />
 
       {/* ── SPLIT PANEL CONTAINER ────────────────────────────────────────── */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 3, bgcolor: 'background.paper' }}>
+      <Box ref={splitPanelRef} sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: isFullscreen ? 0 : 3, bgcolor: 'background.paper', ...(isFullscreen ? { height: '100vh', width: '100vw' } : {}) }}>
 
         {/* ── LEFT PANEL ─────────────────────────────────────────────────── */}
-        <Box sx={{ width: 280, flexShrink: 0, borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ width: leftPanelCollapsed ? 40 : 280, flexShrink: 0, borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'width 0.2s ease' }}>
+          {leftPanelCollapsed ? (
+            // Collapsed: thin strip with expand button
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 1.5 }}>
+              <Tooltip title="Expand panel" placement="right" arrow>
+                <IconButton size="small" onClick={() => setLeftPanelCollapsed(false)} sx={{ color: 'text.secondary' }}>
+                  <ChevronRight fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          ) : (
+            <>
           {/* Header */}
           <Box sx={{ px: 2, pt: 2, pb: 1.5 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle1" fontWeight={700}>Mind Map</Typography>
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<Add />}
-                onClick={() => {
-                  setCreateParentId(null);
-                  setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
-                  setTagInput('');
-                  setCreateDialogOpen(true);
-                }}
-              >
-                New
-              </Button>
+              <Box display="flex" gap={0.5} alignItems="center">
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<Add />}
+                  onClick={() => {
+                    setCreateParentId(null);
+                    setFormData({ title: '', description: '', type: 'INITIATIVE', status: 'OPEN', priority: 'MEDIUM', tags: [], assigneeIds: [] });
+                    setTagInput('');
+                    setCreateDialogOpen(true);
+                  }}
+                >
+                  New
+                </Button>
+                <Tooltip title="Collapse panel">
+                  <IconButton size="small" onClick={() => setLeftPanelCollapsed(true)} sx={{ color: 'text.secondary' }}>
+                    <ChevronLeft fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </Box>
           </Box>
           <Divider />
@@ -702,6 +737,8 @@ function MindMapInner() {
               );
             })}
           </Box>
+            </>
+          )}
         </Box>
 
         {/* ── RIGHT PANEL ────────────────────────────────────────────────── */}
@@ -775,6 +812,15 @@ function MindMapInner() {
                   sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: 'text.secondary' }}
                 >
                   <Refresh fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+                <IconButton
+                  onClick={toggleFullscreen}
+                  size="small"
+                  sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5, color: isFullscreen ? '#6366f1' : 'text.secondary' }}
+                >
+                  {isFullscreen ? <FullscreenExit fontSize="small" /> : <Fullscreen fontSize="small" />}
                 </IconButton>
               </Tooltip>
               <Button

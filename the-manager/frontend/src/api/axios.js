@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:47421/api';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -21,15 +21,47 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Track consecutive network failures to detect a dead backend
+let _networkFailures = 0;
+let _reloadScheduled = false;
+
 // Handle auth errors
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    _networkFailures = 0; // reset on any success
+    return response;
+  },
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Reload the page so Redux re-initialises from empty localStorage.
+      // Simply setting window.location.hash = '/login' won't work because
+      // the in-memory Redux state still has isAuthenticated:true, causing an
+      // immediate redirect back to '/' before the login page can render.
+      window.location.reload();
+      return Promise.reject(error);
     }
+
+    // Network error (ECONNREFUSED / backend crashed / still starting up)
+    if (!error.response && !_reloadScheduled) {
+      _networkFailures++;
+      if (_networkFailures >= 3) {
+        // Backend is down — reload the renderer once it comes back
+        _reloadScheduled = true;
+        const checkInterval = setInterval(async () => {
+          try {
+            await fetch('http://localhost:47421/api/health', { signal: AbortSignal.timeout(2000) });
+            // Backend is back — reload to restore full app state
+            clearInterval(checkInterval);
+            window.location.reload();
+          } catch {
+            // still down, keep polling
+          }
+        }, 2000);
+      }
+    }
+
     return Promise.reject(error);
   }
 );

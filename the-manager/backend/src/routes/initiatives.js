@@ -86,12 +86,31 @@ router.get('/', async (req, res, next) => {
         }
       },
       orderBy: [
-        { priority: 'asc' },
+        { sortOrder: 'asc' },
         { createdAt: 'desc' }
       ]
     });
 
     res.json(initiatives);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Bulk reorder: PATCH /initiatives/reorder
+// Body: { items: [{ id, sortOrder }] }
+router.patch('/reorder', async (req, res, next) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array required' });
+    }
+    await Promise.all(
+      items.map(({ id, sortOrder }) =>
+        prisma.initiative.update({ where: { id }, data: { sortOrder } })
+      )
+    );
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -314,6 +333,9 @@ router.put('/:id', async (req, res, next) => {
     if ('canvasId' in req.body) data.canvasId = req.body.canvasId || null;
     if ('linkedInitiativeId' in req.body) data.linkedInitiativeId = req.body.linkedInitiativeId || null;
     if ('isStandaloneTask' in req.body) data.isStandaloneTask = Boolean(req.body.isStandaloneTask);
+    if ('jiraTicketId' in req.body) data.jiraTicketId = req.body.jiraTicketId || null;
+    if ('jiraTicketUrl' in req.body) data.jiraTicketUrl = req.body.jiraTicketUrl || null;
+    if ('jiraTicketData' in req.body) data.jiraTicketData = req.body.jiraTicketData || null;
 
     if (assigneeIds !== undefined) {
       data.assignees = {
@@ -674,7 +696,7 @@ router.get('/:id/children', async (req, res, next) => {
         }
       },
       orderBy: [
-        { priority: 'asc' },
+        { sortOrder: 'asc' },
         { createdAt: 'desc' }
       ]
     });

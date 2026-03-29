@@ -62,8 +62,9 @@ export default function Dashboard() {
     { label: 'Completed',   value: rootStats.completed,  icon: <CheckCircleOutline />, gradient: 'linear-gradient(135deg, #10b981, #34d399)' },
   ];
 
-  // Recent list: root items only, sorted by most recently updated
+  // Recent list: root items only, excluding completed, sorted by most recently updated
   const recentRoots = [...rootItems]
+    .filter(i => i.status !== 'COMPLETED' && i.status !== 'CANCELLED')
     .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
     .slice(0, 8);
 
@@ -85,6 +86,7 @@ export default function Dashboard() {
       {/* ── AI Prioritization Suggestions ── */}
       <AIPriorityStrip
         mode="initiatives"
+        lazy
         limit={5}
         title="AI Priority Suggestions"
         onCardClick={id => navigate(`/initiatives?open=${id}`)}
@@ -94,6 +96,7 @@ export default function Dashboard() {
       {/* ── AI Task Priorities ── */}
       <AIPriorityStrip
         mode="tasks"
+        lazy
         limit={5}
         title="Task Priorities"
         onCardClick={id => navigate(`/tasks?open=${id}`)}

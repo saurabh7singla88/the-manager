@@ -86,12 +86,12 @@ router.put('/password', async (req, res) => {
 });
 
 // ── List notes (no content) ───────────────────────────────
+// Returns all notes for the user (flat, with parentId).
+// Canvas filtering and tree assembly is handled client-side.
 router.get('/', async (req, res) => {
   try {
-    const { canvasId, search } = req.query;
+    const { search } = req.query;
     const where = { createdById: req.user.id };
-    if (canvasId === 'null' || canvasId === '') where.canvasId = null;
-    else if (canvasId) where.canvasId = canvasId;
     if (search) where.title = { contains: search };
 
     const notes = await prisma.note.findMany({
@@ -99,6 +99,8 @@ router.get('/', async (req, res) => {
       select: {
         id: true,
         title: true,
+        isProtected: true,
+        parentId: true,
         canvasId: true,
         createdAt: true,
         updatedAt: true,
@@ -115,17 +117,24 @@ router.get('/', async (req, res) => {
 // ── Create note ────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const { title, content = '', canvasId } = req.body;
+    const { title, content = '', canvasId, parentId } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Title is required' });
+
+    // Validate parentId belongs to same user
+    if (parentId) {
+      const parent = await prisma.note.findFirst({ where: { id: parentId, createdById: req.user.id } });
+      if (!parent) return res.status(404).json({ error: 'Parent note not found' });
+    }
 
     const note = await prisma.note.create({
       data: {
         title: title.trim(),
         content,
+        parentId: parentId || null,
         canvasId: canvasId || null,
         createdById: req.user.id,
       },
-      select: { id: true, title: true, canvasId: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
     });
     res.status(201).json(note);
   } catch (err) {
@@ -139,9 +148,11 @@ router.get('/:id', async (req, res) => {
   try {
     const note = await prisma.note.findFirst({
       where: { id: req.params.id, createdById: req.user.id },
-      select: { id: true, title: true, content: true, canvasId: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
     });
     if (!note) return res.status(404).json({ error: 'Note not found' });
+    // Protected notes: omit content until verified via POST /:id/unlock
+    if (note.isProtected) return res.json({ ...note, content: null });
     res.json(note);
   } catch (err) {
     console.error(err);
@@ -149,10 +160,36 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ── Unlock note — verify login password, return full content ──────────────
+router.post('/:id/unlock', async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ error: 'Password required' });
+
+    const [note, user] = await Promise.all([
+      prisma.note.findFirst({
+        where: { id: req.params.id, createdById: req.user.id },
+        select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
+      }),
+      prisma.user.findUnique({ where: { id: req.user.id }, select: { password: true } }),
+    ]);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    if (!note.isProtected) return res.json(note);
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Incorrect password' });
+
+    res.json(note);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to unlock note' });
+  }
+});
+
 // ── Update note ────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
   try {
-    const { title, content, canvasId } = req.body;
+    const { title, content, canvasId, parentId, isProtected } = req.body;
     const note = await prisma.note.findFirst({ where: { id: req.params.id, createdById: req.user.id } });
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
@@ -160,11 +197,13 @@ router.put('/:id', async (req, res) => {
     if (title !== undefined) data.title = title.trim();
     if (content !== undefined) data.content = content;
     if (canvasId !== undefined) data.canvasId = canvasId || null;
+    if (parentId !== undefined) data.parentId = parentId || null;
+    if (isProtected !== undefined) data.isProtected = isProtected;
 
     const updated = await prisma.note.update({
       where: { id: req.params.id },
       data,
-      select: { id: true, title: true, content: true, canvasId: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, content: true, isProtected: true, parentId: true, canvasId: true, createdAt: true, updatedAt: true },
     });
     res.json(updated);
   } catch (err) {

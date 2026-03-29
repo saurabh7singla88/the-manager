@@ -1,2 +1,6 @@
 node_modules/
 .env
+*.db
+dist/
+the-manager/frontend/dist/
+the-manager/electron/dist/

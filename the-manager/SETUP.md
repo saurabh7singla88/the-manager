@@ -43,7 +43,7 @@ Edit `backend\.env`:
 DATABASE_URL="postgresql://postgres:password@localhost:5432/initiative_tracker?schema=public"
 JWT_SECRET="your-super-secret-key-change-in-production"
 JWT_EXPIRES_IN="7d"
-PORT=3001
+PORT=47421
 NODE_ENV=development
 ALLOWED_ORIGINS="http://localhost:5173"
 ```
@@ -64,7 +64,7 @@ cd backend
 npm run dev
 ```
 
-Backend should start on: http://localhost:3001
+Backend should start on: http://localhost:47421
 
 ### Terminal 2 - Frontend
 ```powershell

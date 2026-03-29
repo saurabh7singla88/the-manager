@@ -3,11 +3,12 @@ import { useSelector } from 'react-redux';
 import {
   Box, Typography, IconButton, Chip, CircularProgress,
   Divider, Tooltip, TextField, InputAdornment, Alert,
-  Button,
+  Button, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
 } from '@mui/material';
 import {
   Refresh, Email, EventNote, CalendarMonth, InboxOutlined,
   Label as LabelIcon, AutoFixHigh, Person, CheckCircle, ContentCopy, Done,
+  BookmarkAdd, Bookmark, Edit,
 } from '@mui/icons-material';
 
 const PRESET_LABELS = [
@@ -59,7 +60,7 @@ const PROVIDER_LABEL = {
 };
 
 function ActionItemsPanel({ data, userName }) {
-  const { items = [], provider } = data;
+  const { items = [], provider, llmCalled, llmFailed, emptyBody } = data;
   const forMe  = items.filter(i => i.isForMe);
   const others = items.filter(i => !i.isForMe);
   const [copied, setCopied] = useState(false);
@@ -81,12 +82,24 @@ function ActionItemsPanel({ data, userName }) {
   };
 
   if (items.length === 0) {
+    let msg = 'No action items found in this email.';
+    let color = 'text.secondary';
+    if (emptyBody) {
+      msg = 'Email body is empty — nothing to extract. Try refreshing emails.';
+      color = 'warning.main';
+    } else if (llmFailed) {
+      msg = data.llmError || `AI provider (${PROVIDER_LABEL[provider] || provider}) did not respond. Check AI settings in Setup.`;
+      color = 'error.main';
+    } else if (llmCalled === false && provider === 'disabled') {
+      msg = 'AI is disabled. Enable a provider in Setup → AI Settings.';
+      color = 'text.secondary';
+    }
     return (
       <Box
         sx={{ bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2, px: 2.5, py: 2, mb: 3 }}
       >
-        <Typography variant="body2" color="text.secondary" fontStyle="italic">
-          No action items found in this email.
+        <Typography variant="body2" color={color} fontStyle="italic">
+          {msg}
         </Typography>
       </Box>
     );
@@ -242,6 +255,19 @@ export default function MeetingNotes() {
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [actionError, setActionError] = useState(null);
 
+  // save-to-initiative state
+  const [initiatives, setInitiatives] = useState([]);
+  const [savedNotesMap, setSavedNotesMap] = useState({}); // { [messageId]: savedNote }
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveSelectedInit, setSaveSelectedInit] = useState(null);
+  const [savingNote, setSavingNote] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  // fetch flat initiatives list for the picker
+  useEffect(() => {
+    api.get('/initiatives').then(r => setInitiatives((r.data || []).filter(i => !i.parentId))).catch(() => {});
+  }, []);
+
   const fetchActionItems = useCallback(async (email) => {
     if (!email) return;
     setActionLoadingId(email.messageId);
@@ -259,6 +285,45 @@ export default function MeetingNotes() {
       setActionLoadingId(null);
     }
   }, [user]);
+
+  const openSaveDialog = useCallback(() => {
+    if (!selected) return;
+    // Pre-select the already-linked initiative if this note was saved before
+    const existing = savedNotesMap[selected.messageId];
+    setSaveSelectedInit(existing?.initiative || null);
+    setSaveError(null);
+    setSaveDialogOpen(true);
+  }, [selected, savedNotesMap]);
+
+  const handleSaveNote = useCallback(async () => {
+    if (!selected) return;
+    setSavingNote(true);
+    setSaveError(null);
+    try {
+      const existing = savedNotesMap[selected.messageId];
+      if (existing) {
+        // Update the existing record's initiative link
+        const r = await api.patch(`/meeting-notes/${existing.id}`, {
+          initiativeId: saveSelectedInit?.id || null,
+        });
+        setSavedNotesMap(prev => ({ ...prev, [selected.messageId]: r.data }));
+      } else {
+        const r = await api.post('/meeting-notes', {
+          subject:     selected.subject,
+          fromEmail:   selected.from,
+          date:        selected.date,
+          body:        selected.text || '',
+          initiativeId: saveSelectedInit?.id || null,
+        });
+        setSavedNotesMap(prev => ({ ...prev, [selected.messageId]: r.data }));
+      }
+      setSaveDialogOpen(false);
+    } catch (e) {
+      setSaveError(e.response?.data?.error || 'Failed to save meeting note');
+    } finally {
+      setSavingNote(false);
+    }
+  }, [selected, saveSelectedInit, savedNotesMap]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -291,8 +356,7 @@ export default function MeetingNotes() {
   };
 
   // ── layout ───────────────────────────────────────────────────────────────────
-  return (
-    <Box display="flex" height="100vh" overflow="hidden" bgcolor="#f8fafc">
+  return (    <>    <Box display="flex" height="100vh" overflow="hidden" bgcolor="#f8fafc">
 
       {/* ── Left panel ─────────────────────────────────────────────────────── */}
       <Box
@@ -618,6 +682,39 @@ export default function MeetingNotes() {
                   sx={{ bgcolor: '#f0fdf4', color: '#166534', borderRadius: 2, fontSize: '0.75rem' }}
                 />
               )}
+              <Box sx={{ ml: 'auto' }}>
+                {savedNotesMap[selected.messageId] ? (
+                  <Box display="flex" alignItems="center" gap={0.75}>
+                    <Chip
+                      icon={<Bookmark sx={{ fontSize: '14px !important', color: '#059669 !important' }} />}
+                      label={savedNotesMap[selected.messageId].initiative?.title || 'Saved (no initiative)'}
+                      size="small"
+                      sx={{ bgcolor: '#ecfdf5', color: '#065f46', borderRadius: 2, fontWeight: 600, fontSize: '0.75rem', border: '1px solid #a7f3d0' }}
+                    />
+                    <Tooltip title="Change initiative link">
+                      <IconButton size="small" onClick={openSaveDialog} sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1' } }}>
+                        <Edit sx={{ fontSize: 15 }} />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                ) : (
+                  <Tooltip title="Save this email and link it to an initiative">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<BookmarkAdd sx={{ fontSize: '15px !important' }} />}
+                      onClick={openSaveDialog}
+                      sx={{
+                        borderRadius: 2, textTransform: 'none', fontWeight: 600,
+                        fontSize: '0.75rem', borderColor: '#c7d2fe', color: '#6366f1',
+                        '&:hover': { bgcolor: '#f0f0ff', borderColor: '#6366f1' },
+                      }}
+                    >
+                      Save to Initiative
+                    </Button>
+                  </Tooltip>
+                )}
+              </Box>
             </Box>
 
             {/* Action items panel */}
@@ -674,5 +771,56 @@ export default function MeetingNotes() {
         )}
       </Box>
     </Box>
+
+      {/* Save to Initiative dialog */}
+      <Dialog open={saveDialogOpen} onClose={() => setSaveDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 700 }}>Save Meeting Note</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+          <Typography variant="body2" color="text.secondary" noWrap>
+            <strong>{selected?.subject}</strong>
+          </Typography>
+          <Autocomplete
+            options={initiatives}
+            getOptionLabel={(opt) => opt.title || ''}
+            value={saveSelectedInit}
+            onChange={(_, val) => setSaveSelectedInit(val)}
+            isOptionEqualToValue={(opt, val) => opt.id === val?.id}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Link to Initiative (optional)"
+                size="small"
+                placeholder="Search initiatives…"
+                helperText="Leave blank to save without linking to an initiative"
+              />
+            )}
+            renderOption={(props, opt) => (
+              <Box component="li" {...props} key={opt.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                <Box sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, mt: '6px',
+                  bgcolor: opt.status === 'IN_PROGRESS' ? '#3b82f6' : opt.status === 'COMPLETED' ? '#10b981' :
+                           opt.status === 'BLOCKED' ? '#ef4444' : '#94a3b8' }} />
+                <Box>
+                  <Typography variant="body2" fontWeight={500}>{opt.title}</Typography>
+                  {opt.type && <Typography variant="caption" color="text.disabled">{opt.type}</Typography>}
+                </Box>
+              </Box>
+            )}
+          />
+          {saveError && <Alert severity="error" sx={{ borderRadius: 2 }}>{saveError}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button onClick={() => setSaveDialogOpen(false)} variant="outlined" sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+          <Button
+            onClick={handleSaveNote}
+            variant="contained"
+            disabled={savingNote}
+            startIcon={savingNote ? <CircularProgress size={14} /> : <BookmarkAdd />}
+            sx={{ borderRadius: 2, textTransform: 'none', bgcolor: '#6366f1', '&:hover': { bgcolor: '#4f46e5' } }}
+          >
+            {savingNote ? 'Saving…' : savedNotesMap[selected?.messageId] ? 'Update' : 'Save Note'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }

@@ -12,7 +12,7 @@ import {
 } from '@mui/material';
 import {
   Add, Search, Clear, Edit, Delete, Label,
-  MoreVert, OpenInNew, CheckBox as CheckBoxIcon, CalendarToday
+  MoreVert, OpenInNew, CheckBox as CheckBoxIcon, CalendarToday, DragIndicator
 } from '@mui/icons-material';
 import { fetchTasks, createInitiative, updateInitiative, deleteInitiative } from '../features/initiatives/initiativesSlice';
 import CanvasSelector from '../components/CanvasSelector';
@@ -21,6 +21,13 @@ import AIPriorityStrip from '../components/AIPriorityStrip';
 import InitiativeSummaryDialog from '../components/InitiativeSummaryDialog';
 import api from '../api/axios';
 import { format } from 'date-fns';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const PRIORITY_CONFIG = {
   CRITICAL: { color: '#dc2626', bg: '#fef2f2' },
@@ -73,6 +80,35 @@ const EMPTY_FORM = {
   assigneeIds: [],
 };
 
+// Sortable row wrapper for the tasks list
+function SortableTaskItem({ id, children }) {
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id });
+  return (
+    <Box
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      sx={{ opacity: isDragging ? 0.5 : 1, display: 'flex', alignItems: 'center' }}
+    >
+      <Tooltip title="Drag to reorder" placement="left">
+        <Box
+          {...attributes}
+          {...listeners}
+          sx={{
+            px: 0.5, color: 'text.disabled', cursor: 'grab', flexShrink: 0, lineHeight: 0,
+            '&:active': { cursor: 'grabbing' },
+            '&:hover': { color: 'text.secondary' },
+          }}
+        >
+          <DragIndicator sx={{ fontSize: 18 }} />
+        </Box>
+      </Tooltip>
+      <Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+    </Box>
+  );
+}
+
 export default function Tasks() {
   const dispatch = useDispatch();
   const { tasks, tasksLoading } = useSelector(s => s.initiatives);
@@ -110,9 +146,11 @@ export default function Tasks() {
     api.get('/initiatives', { params: { isStandaloneTask: 'true' } })
       .then(r => {
         const map = {};
-        r.data.forEach(t => {
-          if (t.canvasId) map[t.canvasId] = (map[t.canvasId] || 0) + 1;
-        });
+        r.data
+          .filter(t => t.status !== 'COMPLETED' && t.status !== 'CANCELLED')
+          .forEach(t => {
+            if (t.canvasId) map[t.canvasId] = (map[t.canvasId] || 0) + 1;
+          });
         setTaskCountsByCanvas(map);
       })
       .catch(() => {});
@@ -126,6 +164,29 @@ export default function Tasks() {
 
   // Summary dialog
   const [summaryId, setSummaryId] = useState(null);
+
+  // Drag-and-drop ordering
+  const [orderedTasks, setOrderedTasks] = useState([]);
+  const reorderTimerRef = useRef(null);
+  useEffect(() => { setOrderedTasks(tasks); }, [tasks]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+  const handleDragEnd = useCallback(({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    setOrderedTasks(prev => {
+      const oldIdx = prev.findIndex(t => t.id === active.id);
+      const newIdx = prev.findIndex(t => t.id === over.id);
+      const reordered = arrayMove(prev, oldIdx, newIdx);
+      clearTimeout(reorderTimerRef.current);
+      reorderTimerRef.current = setTimeout(() => {
+        api.patch('/initiatives/reorder', {
+          items: reordered.map((item, idx) => ({ id: item.id, sortOrder: idx })),
+        }).catch(() => {});
+      }, 400);
+      return reordered;
+    });
+  }, []);
 
   // Navigate + deep-link
   const navigate = useNavigate();
@@ -190,10 +251,10 @@ export default function Tasks() {
 
   // ── Client-side filter for "pending" (everything that is NOT completed) ──
   const displayTasks = filterStatus === 'pending'
-    ? tasks.filter(t => t.status !== 'COMPLETED')
+    ? orderedTasks.filter(t => t.status !== 'COMPLETED')
     : filterStatus === 'completed'
-    ? tasks.filter(t => t.status === 'COMPLETED')
-    : tasks;
+    ? orderedTasks.filter(t => t.status === 'COMPLETED')
+    : orderedTasks;
 
   // ── Quick add ───────────────────────────────────────────
   const handleQuickAdd = async () => {
@@ -306,6 +367,7 @@ export default function Tasks() {
       {/* AI Task Priority Suggestions */}
       <AIPriorityStrip
         mode="tasks"
+        lazy
         limit={5}
         title="AI Task Priority Suggestions"
         onCardClick={id => { setDrawerTaskId(id); setDrawerOpen(true); }}
@@ -395,15 +457,15 @@ export default function Tasks() {
           <Typography color="text.secondary">No tasks yet. Quick-add one above!</Typography>
         </Box>
       ) : (
-        <Box sx={{ bgcolor: 'background.paper', border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
-          {displayTasks.map((task, idx) => {
+        (() => {
+          const isDragEnabled = !search;
+          const rows = displayTasks.map((task, idx) => {
             const done = task.status === 'COMPLETED';
             const overdue = task.dueDate && new Date(task.dueDate) < new Date() && !done;
             const linkedInit = task.linkedInitiative;
             const canvas = canvases.find(c => c.id === task.canvasId);
-
-            return (
-              <Box key={task.id}>
+            const rowContent = (
+              <>
                 {idx > 0 && <Divider />}
                 <Box
                   display="flex" alignItems="center" gap={1.5} px={2} py={1.25}
@@ -502,10 +564,30 @@ export default function Tasks() {
                     </Tooltip>
                   </Box>
                 </Box>
-              </Box>
+              </>
             );
-          })}
-        </Box>
+            if (isDragEnabled) {
+              return (
+                <SortableTaskItem key={task.id} id={task.id}>
+                  {rowContent}
+                </SortableTaskItem>
+              );
+            }
+            return <Box key={task.id}>{rowContent}</Box>;
+          });
+
+          return (
+            <Box sx={{ bgcolor: 'background.paper', border: '1px solid #e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
+              {isDragEnabled ? (
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={displayTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                    {rows}
+                  </SortableContext>
+                </DndContext>
+              ) : rows}
+            </Box>
+          );
+        })()
       )}
 
       {/* Row context menu */}

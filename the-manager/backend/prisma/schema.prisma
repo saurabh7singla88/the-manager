@@ -2,7 +2,8 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows", "darwin", "darwin-arm64"]
 }
 
 datasource db {
@@ -38,6 +39,7 @@ model User {
   canvases Canvas[]
   brainstormCanvas BrainstormCanvas?
   notes Note[]
+  meetingNotes MeetingNote[]
   googleToken GoogleToken?
 
   @@map("users")
@@ -73,6 +75,9 @@ model Initiative {
   linkedInitiative    Initiative? @relation("TaskInitiativeLink", fields: [linkedInitiativeId], references: [id], onDelete: SetNull)
   linkedTasks         Initiative[] @relation("TaskInitiativeLink")
 
+  // External integrations (JIRA tickets, Confluence pages, etc.)
+  integrationItems IntegrationItem[]
+
   // Canvas
   canvasId    String?
   canvas      Canvas?  @relation(fields: [canvasId], references: [id])
@@ -80,6 +85,9 @@ model Initiative {
   // Position for mind map view
   positionX   Float?
   positionY   Float?
+
+  // Manual sort order (drag-and-drop)
+  sortOrder   Int      @default(0)
   
   // Relations
   createdById String
@@ -90,6 +98,7 @@ model Initiative {
   links       Link[]
   comments    Comment[]
   activityLogs ActivityLog[]
+  meetingNotes MeetingNote[]
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -97,6 +106,7 @@ model Initiative {
   @@index([parentId])
   @@index([status])
   @@index([priority])
+  @@index([sortOrder])
   @@index([createdById])
   @@index([canvasId])
   @@map("initiatives")
@@ -204,6 +214,11 @@ model Note {
   isProtected  Boolean  @default(false)
   passwordHash String?
 
+  // Hierarchy — unlimited nesting depth
+  parentId     String?
+  parent       Note?    @relation("NoteChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children     Note[]   @relation("NoteChildren")
+
   canvasId     String?
   canvas       Canvas?  @relation(fields: [canvasId], references: [id], onDelete: SetNull)
 
@@ -215,6 +230,7 @@ model Note {
 
   @@index([createdById])
   @@index([canvasId])
+  @@index([parentId])
   @@map("notes")
 }
 
@@ -224,6 +240,24 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+model IntegrationItem {
+  id           String   @id @default(uuid())
+  type         String   // JIRA | CONFLUENCE
+  key          String?  // JIRA: ticket key (e.g. PROJ-123); Confluence: page ID
+  url          String
+  title        String?
+  cachedData   String?  // JSON snapshot from API
+
+  initiativeId String
+  initiative   Initiative @relation(fields: [initiativeId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@map("integration_items")
 }
 
 model GoogleToken {
@@ -237,4 +271,25 @@ model GoogleToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("google_tokens")
+}
+
+model MeetingNote {
+  id          String   @id @default(uuid())
+  subject     String
+  fromEmail   String?
+  date        DateTime?
+  body        String   @default("")
+
+  initiativeId String?
+  initiative   Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([initiativeId])
+  @@index([createdById])
+  @@map("meeting_notes")
 }

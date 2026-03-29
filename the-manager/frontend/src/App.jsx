@@ -4,13 +4,16 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import InitiativesList from './pages/InitiativesList';
+import InitiativeDetail from './pages/InitiativeDetail';
 import MindMap from './pages/MindMap';
 import Tasks from './pages/Tasks';
 import Users from './pages/Users';
-import Brainstorm from './pages/Brainstorm';
+
 import Notes from './pages/Notes';
 import MeetingNotes from './pages/MeetingNotes';
+import AINewsletter from './pages/AINewsletter';
 import Setup from './pages/Setup';
+import Help from './pages/Help';
 import Layout from './components/Layout';
 
 function App() {
@@ -24,13 +27,16 @@ function App() {
       <Route element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/initiatives" element={<InitiativesList />} />
+        <Route path="/initiatives/:id" element={<InitiativeDetail />} />
         <Route path="/mindmap" element={<MindMap />} />
         <Route path="/tasks" element={<Tasks />} />
-        <Route path="/brainstorm" element={<Brainstorm />} />
+
         <Route path="/notes" element={<Notes />} />
         <Route path="/meeting-notes" element={<MeetingNotes />} />
+        <Route path="/ai-newsletter" element={<AINewsletter />} />
         <Route path="/users" element={<Users />} />
         <Route path="/setup" element={<Setup />} />
+        <Route path="/help" element={<Help />} />
       </Route>
     </Routes>
   );
