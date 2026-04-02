@@ -4,10 +4,12 @@ import {
   Box, Typography, Button, IconButton, TextField, Chip,
   CircularProgress, Divider, Tooltip, InputAdornment,
   Dialog, DialogTitle, DialogContent, DialogActions,
+  Menu, MenuItem,
 } from '@mui/material';
 import {
   Add, Delete, Lock, LockOpen, LockOutlined, Search, Clear,
   NoteAlt, CheckCircle, ChevronRight, ExpandMore, SubdirectoryArrowRight,
+  Dashboard,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import api from '../api/axios';
@@ -365,6 +367,9 @@ export default function Notes() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [creating, setCreating] = useState(false);
 
+  // Canvas assignment menu
+  const [canvasMenuAnchor, setCanvasMenuAnchor] = useState(null);
+
   // ── Load settings ──────────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchCanvases());
@@ -545,6 +550,17 @@ export default function Notes() {
     } catch (e) { console.error(e); }
   };
 
+  // ── Canvas assignment ────────────────────────────────────────────────────
+  const handleAssignCanvas = useCallback(async (canvasId) => {
+    if (!editorNote) return;
+    setCanvasMenuAnchor(null);
+    try {
+      const r = await api.put(`/notes/${editorNote.id}`, { canvasId: canvasId || null });
+      setEditorNote(prev => ({ ...prev, canvasId: r.data.canvasId }));
+      setAllNotes(prev => prev.map(n => n.id === editorNote.id ? { ...n, canvasId: r.data.canvasId } : n));
+    } catch (e) { console.error(e); }
+  }, [editorNote]);
+
   // ── Password management ────────────────────────────────────────────────────
   const handlePwSuccess = (step) => {
     if (step === 'set') { setHasPassword(true); setIsUnlocked(true); }
@@ -677,6 +693,26 @@ export default function Notes() {
                   {saveState === 'saved'  && <><CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} /><Typography variant="caption" color="text.disabled">Saved</Typography></>}
                   {saveState === 'error'  && <Typography variant="caption" color="error">Save failed</Typography>}
                 </Box>
+                {/* Canvas assignment */}
+                {(() => {
+                  const assignedCanvas = canvases.find(c => c.id === editorNote.canvasId);
+                  return (
+                    <Tooltip title={assignedCanvas ? `Canvas: ${assignedCanvas.name} — click to change` : 'Assign to canvas'}>
+                      <IconButton
+                        size="small"
+                        onClick={e => setCanvasMenuAnchor(e.currentTarget)}
+                        sx={{
+                          color: assignedCanvas ? assignedCanvas.color : 'text.disabled',
+                          bgcolor: assignedCanvas ? assignedCanvas.color + '18' : 'transparent',
+                          '&:hover': { bgcolor: assignedCanvas ? assignedCanvas.color + '30' : '#f0f4ff', color: assignedCanvas ? assignedCanvas.color : '#6366f1' },
+                          borderRadius: 1.5,
+                        }}
+                      >
+                        <Dashboard sx={{ fontSize: 17 }} />
+                      </IconButton>
+                    </Tooltip>
+                  );
+                })()}
                 <Tooltip title={editorNote.isProtected ? 'Remove protection' : 'Lock note (uses login password)'}>
                   <IconButton size="small" onClick={handleToggleLock}
                     sx={{ color: editorNote.isProtected ? '#6366f1' : 'text.disabled', '&:hover': { color: '#6366f1', bgcolor: '#f0f4ff' }, borderRadius: 1.5 }}>
@@ -830,6 +866,40 @@ export default function Notes() {
         onClose={() => setUnlockTarget(null)}
         onUnlocked={handleNoteUnlocked}
       />
+
+      {/* Canvas assignment menu */}
+      <Menu
+        anchorEl={canvasMenuAnchor}
+        open={!!canvasMenuAnchor}
+        onClose={() => setCanvasMenuAnchor(null)}
+        PaperProps={{ sx: { borderRadius: 2, minWidth: 200 } }}
+        transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+        anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+      >
+        <Typography variant="caption" color="text.disabled" fontWeight={700} sx={{ px: 2, pt: 1, pb: 0.5, display: 'block', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Assign to canvas
+        </Typography>
+        <Divider sx={{ mb: 0.5 }} />
+        <MenuItem
+          onClick={() => handleAssignCanvas(null)}
+          selected={!editorNote?.canvasId}
+          sx={{ gap: 1, borderRadius: 1, mx: 0.5 }}
+        >
+          <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#94a3b8', flexShrink: 0 }} />
+          <Typography variant="body2">None</Typography>
+        </MenuItem>
+        {canvases.map(canvas => (
+          <MenuItem
+            key={canvas.id}
+            onClick={() => handleAssignCanvas(canvas.id)}
+            selected={editorNote?.canvasId === canvas.id}
+            sx={{ gap: 1, borderRadius: 1, mx: 0.5 }}
+          >
+            <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: canvas.color, flexShrink: 0 }} />
+            <Typography variant="body2">{canvas.name}</Typography>
+          </MenuItem>
+        ))}
+      </Menu>
 
       {/* Delete confirm */}
       <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>

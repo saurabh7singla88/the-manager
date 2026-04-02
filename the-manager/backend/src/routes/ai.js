@@ -85,10 +85,13 @@ async function callOpenAI(settings, systemPrompt, userPrompt) {
 // ─── Provider: Google Gemini ──────────────────────────────────────────────────
 // Returns { text: string } on success, or { error: string } on failure.
 // Pass schemaOverride=false for free-text (non-JSON) responses.
-async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = null) {
+// Retries up to GEMINI_MAX_RETRIES times on 429/503 with exponential back-off.
+const GEMINI_MAX_RETRIES = 3;
+const GEMINI_RETRY_BASE_MS = 2000; // 2 s → 4 s → 8 s
+
+async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = null, timeoutMs = LLM_TIMEOUT) {
   if (!settings.ai_gemini_api_key) return { error: 'Gemini API key not configured. Add it in Setup → AI Settings.' };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT);
+
   const defaultSchema = {
     type: 'OBJECT',
     properties: {
@@ -110,41 +113,67 @@ async function callGemini(settings, systemPrompt, userPrompt, schemaOverride = n
   // schemaOverride=false → plain text response (no JSON schema enforcement)
   const useSchema = schemaOverride !== false;
   const schema = useSchema ? (schemaOverride || defaultSchema) : null;
-  try {
-    const model = settings.ai_gemini_model || 'gemini-1.5-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.ai_gemini_api_key}`;
-    const generationConfig = useSchema
-      ? { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1, maxOutputTokens: 4096 }
-      : { temperature: 0.2, maxOutputTokens: 4096 };
-    const res = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig,
-      }),
-    });
 
-    const data = await res.json();
+  const model = settings.ai_gemini_model || 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.ai_gemini_api_key}`;
+  const generationConfig = useSchema
+    ? { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1, maxOutputTokens: 4096 }
+    : { temperature: 0.2, maxOutputTokens: 4096 };
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    generationConfig,
+  });
 
-    if (!res.ok) {
-      const msg = data?.error?.message || `HTTP ${res.status}`;
-      logger.error('Gemini API error', { status: res.status, model, error: data?.error });
-      return { error: `Gemini error: ${msg}` };
-    }
+  for (let attempt = 0; attempt <= GEMINI_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body,
+      });
 
-    const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text?.trim();
-    if (!text) {
-      const reason = candidate?.finishReason || 'unknown';
-      logger.warn('Gemini returned no text', { finishReason: reason, promptFeedback: data?.promptFeedback });
-      return { error: `Gemini returned no content (finishReason: ${reason})` };
-    }
-    return { text };
-  } catch (e) {
-    logger.error('Gemini call failed', e);
-    return { error: e.name === 'AbortError' ? 'Gemini request timed out' : e.message };
-  } finally { clearTimeout(timer); }
+      const data = await res.json();
+
+      // Retryable: 429 rate-limit or 503 overload
+      if ((res.status === 429 || res.status === 503) && attempt < GEMINI_MAX_RETRIES) {
+        const delay = GEMINI_RETRY_BASE_MS * Math.pow(2, attempt);
+        logger.warn(`Gemini ${res.status} on attempt ${attempt + 1}, retrying in ${delay}ms`, { model });
+        clearTimeout(timer);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      if (!res.ok) {
+        const msg = data?.error?.message || `HTTP ${res.status}`;
+        logger.error('Gemini API error', { status: res.status, model, error: data?.error });
+        return { error: `Gemini error: ${msg}` };
+      }
+
+      const candidate = data.candidates?.[0];
+      const text = candidate?.content?.parts?.[0]?.text?.trim();
+      if (!text) {
+        const reason = candidate?.finishReason || 'unknown';
+        logger.warn('Gemini returned no text', { finishReason: reason, promptFeedback: data?.promptFeedback });
+        return { error: `Gemini returned no content (finishReason: ${reason})` };
+      }
+      return { text };
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        if (attempt < GEMINI_MAX_RETRIES) {
+          const delay = GEMINI_RETRY_BASE_MS * Math.pow(2, attempt);
+          logger.warn(`Gemini timed out on attempt ${attempt + 1}, retrying in ${delay}ms`, { model });
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        return { error: 'Gemini request timed out after retries' };
+      }
+      logger.error('Gemini call failed', e);
+      return { error: e.message };
+    } finally { clearTimeout(timer); }
+  }
+  return { error: 'Gemini did not respond after retries. It may be experiencing high demand — please try again shortly.' };
 }
 
 // ─── LLM urgency analyser (provider-agnostic) ─────────────────────────────────
@@ -648,7 +677,8 @@ router.post('/rephrase', async (req, res, next) => {
     if (provider === 'ollama') rawText = await callOllama(settings, systemPrompt, userPrompt);
     else if (provider === 'openai' || provider === 'openai_compatible') rawText = await callOpenAI(settings, systemPrompt, userPrompt);
     else if (provider === 'gemini') {
-      const r = await callGemini(settings, systemPrompt, userPrompt, false);
+      // Give rephrase calls a longer per-attempt timeout (60 s) so retries have room to succeed
+      const r = await callGemini(settings, systemPrompt, userPrompt, false, 60_000);
       if (r.error) llmError = r.error;
       else rawText = r.text;
     }

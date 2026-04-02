@@ -81,6 +81,9 @@ async function tursoExec(statements, { databaseUrl, authToken } = {}) {
     method:  'POST',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({ requests }),
+  }).catch(err => {
+    const cause = err.cause?.message || err.cause?.code || String(err.cause ?? '');
+    throw new Error(`fetch failed${cause ? ` (${cause})` : ''}`);
   });
 
   if (!res.ok) {
@@ -266,27 +269,29 @@ async function restoreToLocal(data) {
 }
 
 /**
- * Write a data dump into Turso atomically.
+ * Write a data dump into Turso.
  *
- * All DELETE + INSERT statements are sent in a single HTTP pipeline call
- * wrapped in BEGIN / COMMIT.  If anything fails the error is thrown before
- * COMMIT is sent, Turso receives the 'close' sentinel and auto-rolls back,
- * so Turso is never left in a partially-written state.
+ * Phase 1: DELETE all existing rows in a single atomic request (small payload).
+ * Phase 2: INSERT rows in batches of INSERT_BATCH to avoid oversized HTTP
+ *          requests that cause "fetch failed" connection resets.
+ *
+ * Each batch is wrapped in its own BEGIN/COMMIT so Turso auto-rolls back that
+ * batch on error. If a batch fails the push route catches, logs, and returns
+ * an error — the next push will retry from scratch.
  */
 async function restoreToTurso(data) {
-  const insertStmts = [];
+  const INSERT_BATCH = 200; // rows per pipeline request
 
+  // Build all INSERT statements in FK-safe order
+  const allInserts = [];
   for (const table of TABLE_INSERT_ORDER) {
     let rows = data[table] ?? [];
     if (!rows.length) continue;
-
-    // Topological sort so parents are inserted before children
     if (rows[0] && 'parentId' in rows[0]) rows = topoSort(rows);
-
     for (const row of rows) {
       const cols = Object.keys(row);
       if (!cols.length) continue;
-      insertStmts.push({
+      allInserts.push({
         sql:  `INSERT OR REPLACE INTO "${table}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
         args: cols.map(c => row[c] ?? null),
       });
@@ -302,14 +307,18 @@ async function restoreToTurso(data) {
     (existsResult[0]?.rows ?? []).map(r => (typeof r[0] === 'object' ? r[0].value : r[0]))
   );
 
-  // Single HTTP call — BEGIN + deletes (only existing tables) + inserts + COMMIT.
-  // On any error tursoExec throws before COMMIT is reached; Turso auto-rolls back.
+  // Phase 1: wipe all existing data (one small atomic request)
   await tursoExec([
     { sql: 'BEGIN' },
     ...TABLE_DELETE_ORDER.filter(t => tursoTables.has(t)).map(t => ({ sql: `DELETE FROM "${t}"` })),
-    ...insertStmts,
     { sql: 'COMMIT' },
   ]);
+
+  // Phase 2: insert in batches to keep each HTTP request small
+  for (let i = 0; i < allInserts.length; i += INSERT_BATCH) {
+    const batch = allInserts.slice(i, i + INSERT_BATCH);
+    await tursoExec([{ sql: 'BEGIN' }, ...batch, { sql: 'COMMIT' }]);
+  }
 }
 
 /**
